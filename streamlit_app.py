@@ -10,9 +10,6 @@ st.set_page_config(
     layout="wide",
 )
 
-# Caminho do arquivo de imagem na pasta principal do projeto
-LOGO_PATH = "logos_fortfisc_fundoamazonia.png"
-
 # Pequeno ajuste visual no fundo e nos títulos (CSS leve)
 st.markdown(
     """
@@ -47,35 +44,41 @@ st.markdown(
 )
 
 # ============================================================
-# 🧩 CABEÇALHO COM LOGO
+# 🧩 CABEÇALHO
 # ============================================================
 
 st.markdown('<div class="pncp-header">', unsafe_allow_html=True)
 
-# Duas colunas: logo à esquerda, título à direita
-col_logo, col_titulo = st.columns([1, 3])
+st.title("Pesquisa de Preços PNCP – Lei 14.133/2021")
 
-with col_logo:
-    # A imagem está na mesma pasta do streamlit_app.py
-    # Se não aparecer, confira o nome/ extensão do arquivo
-    st.image(LOGO_PATH, use_column_width=True)
+# 🔽 As três linhas abaixo foram ajustadas para alinhar à esquerda
+st.markdown(
+    """
+    <div style="text-align: left;">
+      Aplicação para pesquisa de preços no PNCP, 
+      com geração de planilha Excel e nota técnica em HTML.
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
-with col_titulo:
-    st.title("Pesquisa de Preços PNCP – Lei 14.133/2021")
+st.markdown(
+    """
+    <div style="text-align: left;">
+      <em>Projeto desenvolvido pela Coordenação de Assuntos Estratégicos de Proteção Ambiental - Copes/Dipro/Ibama</em>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
-    st.markdown(
-        "Aplicação para pesquisa de preços no PNCP, "
-        "com geração de planilha Excel e nota técnica em HTML."
-    )
-
-    st.markdown(
-        "_Projeto desenvolvido pela Coordenação de Assuntos Estratégicos de Proteção Ambiental - Copes/Dipro/Ibama_"
-    )
-
-    st.markdown(
-        '<span class="pncp-badge">Janela temporal: últimos 12 meses de inclusão no PNCP</span>',
-        unsafe_allow_html=True,
-    )
+st.markdown(
+    """
+    <div style="text-align: left;">
+      <span class="pncp-badge">Janela temporal: últimos 12 meses de inclusão no PNCP</span>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 st.markdown("</div>", unsafe_allow_html=True)
 
