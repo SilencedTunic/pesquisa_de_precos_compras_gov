@@ -7,9 +7,15 @@ st.set_page_config(
 )
 
 st.title("Pesquisa de Preços PNCP – Lei 14.133/2021")
+
+# ✅ Texto ajustado aqui:
 st.markdown(
-    "Aplicação para pesquisa automatizada de preços no PNCP, "
+    "Aplicação para pesquisa de preços no PNCP, "
     "com geração de planilha Excel e nota técnica em HTML."
+)
+
+st.markdown(
+    "_Desenvolvido pela Coordenação de Assuntos Estratégicos de Proteção Ambiental - Copes/Dipro/Ibama_"
 )
 
 with st.form("filtros_pncp"):
