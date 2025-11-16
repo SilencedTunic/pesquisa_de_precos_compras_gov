@@ -10,6 +10,9 @@ st.set_page_config(
     layout="wide",
 )
 
+# Caminho do arquivo de imagem na pasta principal do projeto
+LOGO_PATH = "logos_fortfisc_fundoamazonia.png"
+
 # Pequeno ajuste visual no fundo e nos títulos (CSS leve)
 st.markdown(
     """
@@ -44,45 +47,33 @@ st.markdown(
 )
 
 # ============================================================
-# 🧩 CABEÇALHO COM LOGO + TEXTO À ESQUERDA
+# 🧩 CABEÇALHO COM LOGO
 # ============================================================
 
 st.markdown('<div class="pncp-header">', unsafe_allow_html=True)
 
-col_logo, col_texto = st.columns([1, 3])
+# Duas colunas: logo à esquerda, título à direita
+col_logo, col_titulo = st.columns([1, 3])
 
 with col_logo:
-    # Arquivo PNG na mesma pasta do streamlit_app.py
-    st.image("logos_fortfisc_fundoamazonia.png", use_column_width=True)
+    # A imagem está na mesma pasta do streamlit_app.py
+    # Se não aparecer, confira o nome/ extensão do arquivo
+    st.image(LOGO_PATH, use_column_width=True)
 
-with col_texto:
+with col_titulo:
     st.title("Pesquisa de Preços PNCP – Lei 14.133/2021")
 
     st.markdown(
-        """
-        <div style="text-align: left;">
-          Aplicação para pesquisa de preços no PNCP,
-          com geração de planilha Excel e nota técnica em HTML.
-        </div>
-        """,
-        unsafe_allow_html=True,
+        "Aplicação para pesquisa de preços no PNCP, "
+        "com geração de planilha Excel e nota técnica em HTML."
     )
 
     st.markdown(
-        """
-        <div style="text-align: left;">
-          <em>Projeto desenvolvido pela Coordenação de Assuntos Estratégicos de Proteção Ambiental - Copes/Dipro/Ibama</em>
-        </div>
-        """,
-        unsafe_allow_html=True,
+        "_Projeto desenvolvido pela Coordenação de Assuntos Estratégicos de Proteção Ambiental - Copes/Dipro/Ibama_"
     )
 
     st.markdown(
-        """
-        <div style="text-align: left;">
-          <span class="pncp-badge">Janela temporal: últimos 12 meses de inclusão no PNCP</span>
-        </div>
-        """,
+        '<span class="pncp-badge">Janela temporal: últimos 12 meses de inclusão no PNCP</span>',
         unsafe_allow_html=True,
     )
 
@@ -314,6 +305,7 @@ if executar:
     # ========================================================
     base = meta.get("nome_base", "pncp_pesquisa")
 
+    # Resumo dos filtros efetivos aplicados
     st.markdown("### Resumo dos filtros aplicados")
     filtros_efetivos = meta.get("filtros_efetivos", {})
     if filtros_efetivos:
@@ -322,12 +314,14 @@ if executar:
         st.caption("Nenhum filtro adicional foi aplicado além do período de 12 meses.")
 
     if not excel_bytes:
+        # Não há dados suficientes para montar Excel, mas o HTML ainda é útil
         st.warning(
             "Nenhum dado foi encontrado para os filtros informados no período considerado. "
             "Ainda assim, uma nota técnica foi gerada registrando a tentativa de pesquisa "
             "no PNCP e os filtros utilizados."
         )
 
+        # Download do HTML mesmo sem Excel
         st.download_button(
             label="⬇️ Baixar nota técnica em HTML",
             data=html_string.encode("utf-8"),
@@ -341,11 +335,13 @@ if executar:
     else:
         st.success("Pesquisa concluída com sucesso!")
 
+        # Abas para organizar área de resultados
         tab_downloads, tab_preview = st.tabs(["📂 Downloads", "📝 Nota técnica (visualização)"])
 
         with tab_downloads:
             st.markdown("#### Arquivos gerados")
 
+            # Download da planilha
             st.download_button(
                 label="⬇️ Baixar planilha Excel",
                 data=excel_bytes,
@@ -353,6 +349,7 @@ if executar:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
+            # Download do HTML
             st.download_button(
                 label="⬇️ Baixar nota técnica em HTML",
                 data=html_string.encode("utf-8"),
