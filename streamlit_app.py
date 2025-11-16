@@ -10,6 +10,9 @@ st.set_page_config(
     layout="wide",
 )
 
+# Caminho do arquivo de imagem na pasta principal do projeto
+LOGO_PATH = "logos_fortfisc_fundoamazonia.png"
+
 # Pequeno ajuste visual no fundo e nos títulos (CSS leve)
 st.markdown(
     """
@@ -44,26 +47,35 @@ st.markdown(
 )
 
 # ============================================================
-# 🧩 CABEÇALHO
+# 🧩 CABEÇALHO COM LOGO
 # ============================================================
 
 st.markdown('<div class="pncp-header">', unsafe_allow_html=True)
 
-st.title("Pesquisa de Preços PNCP – Lei 14.133/2021")
+# Duas colunas: logo à esquerda, título à direita
+col_logo, col_titulo = st.columns([1, 3])
 
-st.markdown(
-    "Aplicação para pesquisa de preços no PNCP, "
-    "com geração de planilha Excel e nota técnica em HTML."
-)
+with col_logo:
+    # A imagem está na mesma pasta do streamlit_app.py
+    # Se não aparecer, confira o nome/ extensão do arquivo
+    st.image(LOGO_PATH, use_column_width=True)
 
-st.markdown(
-    "_Projeto desenvolvido pela Coordenação de Assuntos Estratégicos de Proteção Ambiental - Copes/Dipro/Ibama_"
-)
+with col_titulo:
+    st.title("Pesquisa de Preços PNCP – Lei 14.133/2021")
 
-st.markdown(
-    '<span class="pncp-badge">Janela temporal: últimos 12 meses de inclusão no PNCP</span>',
-    unsafe_allow_html=True,
-)
+    st.markdown(
+        "Aplicação para pesquisa de preços no PNCP, "
+        "com geração de planilha Excel e nota técnica em HTML."
+    )
+
+    st.markdown(
+        "_Projeto desenvolvido pela Coordenação de Assuntos Estratégicos de Proteção Ambiental - Copes/Dipro/Ibama_"
+    )
+
+    st.markdown(
+        '<span class="pncp-badge">Janela temporal: últimos 12 meses de inclusão no PNCP</span>',
+        unsafe_allow_html=True,
+    )
 
 st.markdown("</div>", unsafe_allow_html=True)
 
