@@ -841,6 +841,137 @@ def main():
 # 🏁 PONTO DE ENTRADA
 # ============================================================
 
+# ============================================================
+# 🔁 FUNÇÃO PARA USO VIA APLICAÇÃO WEB (STREAMLIT)
+# ============================================================
+
+import io
+import os
+
+def executar_pesquisa_e_gerar_arquivos(
+    cod_item_catalogo=None,
+    orgao_cnpj="",
+    unidade_orgao=None,
+    situacao_item="",
+    material_ou_servico="",
+    codigo_classe=None,
+    codigo_grupo=None,
+    cod_fornecedor="",
+    tem_resultado=None,
+    bps=None,
+    margem_pref_normal=None,
+    codigo_ncm="",
+    nome_base_saida=None,
+):
+    """
+    Executa toda a pipeline:
+      - configura os filtros,
+      - chama a API do PNCP,
+      - gera DataFrames,
+      - monta Excel em memória (bytes),
+      - monta HTML da nota técnica (string).
+
+    Retorna:
+      (excel_bytes, html_string, meta_dict)
+    """
+    global COD_ITEM_CATALOGO, ORGAO_ENTIDADE_CNPJ, UNIDADE_ORGAO_CODIGO_UNIDADE
+    global SITUACAO_COMPRA_ITEM, MATERIAL_OU_SERVICO, CODIGO_CLASSE, CODIGO_GRUPO
+    global COD_FORNECEDOR, FILTRAR_TEM_RESULTADO, FILTRAR_BPS
+    global FILTRAR_MARGEM_PREFERENCIA_NORMAL, CODIGO_NCM, NOME_BASE_SAIDA
+
+    # Ajusta configuração global conforme parâmetros recebidos
+    COD_ITEM_CATALOGO = cod_item_catalogo
+    ORGAO_ENTIDADE_CNPJ = orgao_cnpj or ""
+    UNIDADE_ORGAO_CODIGO_UNIDADE = unidade_orgao
+    SITUACAO_COMPRA_ITEM = situacao_item or ""
+    MATERIAL_OU_SERVICO = material_ou_servico or ""
+    CODIGO_CLASSE = codigo_classe
+    CODIGO_GRUPO = codigo_grupo
+    COD_FORNECEDOR = cod_fornecedor or ""
+    FILTRAR_TEM_RESULTADO = tem_resultado
+    FILTRAR_BPS = bps
+    FILTRAR_MARGEM_PREFERENCIA_NORMAL = margem_pref_normal
+    CODIGO_NCM = codigo_ncm or ""
+    NOME_BASE_SAIDA = nome_base_saida
+
+    # Intervalo padrão de 1 ano
+    data_inicial, data_final = calcular_intervalo_ultimo_ano()
+
+    # Filtros opcionais montados pela função existente
+    filtros = montar_filtros_opcionais()
+
+    filtros_efetivos = {
+        "codItemCatalogo": cod_item_catalogo if cod_item_catalogo is not None else "",
+        "orgaoEntidadeCnpj": ORGAO_ENTIDADE_CNPJ,
+        "unidadeOrgaoCodigoUnidade": UNIDADE_ORGAO_CODIGO_UNIDADE,
+        "situacaoCompraItem": SITUACAO_COMPRA_ITEM,
+        "materialOuServico": MATERIAL_OU_SERVICO,
+        "codigoClasse": CODIGO_CLASSE,
+        "codigoGrupo": CODIGO_GRUPO,
+        "codFornecedor": COD_FORNECEDOR,
+        "temResultado": FILTRAR_TEM_RESULTADO,
+        "bps": FILTRAR_BPS,
+        "margemPreferenciaNormal": FILTRAR_MARGEM_PREFERENCIA_NORMAL,
+        "codigoNCM": CODIGO_NCM,
+    }
+    filtros_efetivos = {
+        k: v for k, v in filtros_efetivos.items()
+        if v not in (None, "", [])
+    }
+
+    # Chamada paginada à API
+    resultados = buscar_itens_pncp(
+        cod_item_catalogo=cod_item_catalogo,
+        data_inicial=data_inicial,
+        data_final=data_final,
+        filtros_opcionais=filtros,
+        tamanho_pagina=500,
+    )
+
+    df_dados, resumo_df, preco_ref_df = preparar_dataframes(resultados)
+
+    # Define nome base sem extensão
+    if nome_base_saida:
+        base = nome_base_saida
+    else:
+        cod_str = str(cod_item_catalogo) if cod_item_catalogo is not None else "sem_item"
+        base = f"pncp_itens_param_{cod_str}_{data_inicial}_a_{data_final}"
+
+    # ===== Excel em memória =====
+    excel_buffer = io.BytesIO()
+    with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
+        if df_dados is not None and not df_dados.empty:
+            df_dados.to_excel(writer, index=False, sheet_name="dados")
+        if resumo_df is not None and not resumo_df.empty:
+            resumo_df.to_excel(writer, index=False, sheet_name="resumo_unidade")
+        if preco_ref_df is not None and not preco_ref_df.empty:
+            preco_ref_df.to_excel(writer, index=False, sheet_name="preco_referencia")
+    excel_buffer.seek(0)
+
+    # ===== HTML da nota técnica (usando função existente) =====
+    meta = {
+        "data_inicial": data_inicial,
+        "data_final": data_final,
+        "filtros_efetivos": filtros_efetivos,
+    }
+
+    html_caminho_tmp = f"{base}.html"
+    gerar_relatorio_html(df_dados, resumo_df, preco_ref_df, meta, html_caminho_tmp)
+
+    with open(html_caminho_tmp, "r", encoding="utf-8") as f:
+        html_string = f.read()
+
+    # Opcional: apaga arquivo temporário no ambiente do servidor
+    try:
+        os.remove(html_caminho_tmp)
+    except Exception:
+        pass
+
+    meta["nome_base"] = base
+
+    return excel_buffer.getvalue(), html_string, meta
+
+
 if __name__ == "__main__":
     # Opcional: teste local
     # main()
