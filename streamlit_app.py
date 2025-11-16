@@ -15,7 +15,7 @@ st.markdown(
 )
 
 st.markdown(
-    "_Desenvolvido pela Coordenação de Assuntos Estratégicos de Proteção Ambiental - Copes/Dipro/Ibama_"
+    "_Projeto desenvolvido pela Coordenação de Assuntos Estratégicos de Proteção Ambiental - Copes/Dipro/Ibama_"
 )
 
 with st.form("filtros_pncp"):
