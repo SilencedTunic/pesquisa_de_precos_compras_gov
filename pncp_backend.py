@@ -938,15 +938,19 @@ def executar_pesquisa_e_gerar_arquivos(
         base = f"pncp_itens_param_{cod_str}_{data_inicial}_a_{data_final}"
 
     # ===== Excel em memória =====
-    excel_buffer = io.BytesIO()
-    with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
-        if df_dados is not None and not df_dados.empty:
+    if df_dados is not None and not df_dados.empty:
+        excel_buffer = io.BytesIO()
+        with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
             df_dados.to_excel(writer, index=False, sheet_name="dados")
-        if resumo_df is not None and not resumo_df.empty:
-            resumo_df.to_excel(writer, index=False, sheet_name="resumo_unidade")
-        if preco_ref_df is not None and not preco_ref_df.empty:
-            preco_ref_df.to_excel(writer, index=False, sheet_name="preco_referencia")
-    excel_buffer.seek(0)
+            if resumo_df is not None and not resumo_df.empty:
+                resumo_df.to_excel(writer, index=False, sheet_name="resumo_unidade")
+            if preco_ref_df is not None and not preco_ref_df.empty:
+                preco_ref_df.to_excel(writer, index=False, sheet_name="preco_referencia")
+        excel_buffer.seek(0)
+        excel_bytes = excel_buffer.getvalue()
+    else:
+        print("⚠ Nenhum dado retornado pela API. Excel não será gerado.")
+        excel_bytes = b""  # vazio → o Streamlit mostra mensagem de erro amigável
 
     # ===== HTML da nota técnica (usando função existente) =====
     meta = {
@@ -969,7 +973,7 @@ def executar_pesquisa_e_gerar_arquivos(
 
     meta["nome_base"] = base
 
-    return excel_buffer.getvalue(), html_string, meta
+    return excel_bytes, html_string, meta
 
 
 if __name__ == "__main__":
