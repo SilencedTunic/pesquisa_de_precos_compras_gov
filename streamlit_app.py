@@ -1,4 +1,8 @@
 import random
+import threading
+import time
+from queue import Queue
+
 import streamlit as st
 import pncp_backend  # backend com a lógica de consulta e geração de arquivos
 
@@ -21,15 +25,20 @@ LOGO_PATH = "logos_fortfisc_fundoamazonia.png"
 st.markdown(
     """
     <style>
+    /* Remove a barra branca padrão do topo (header do Streamlit) */
+    [data-testid="stHeader"] {
+        display: none !important;
+    }
+
     /* Fundo geral em tom claro com gradiente suave */
     [data-testid="stAppViewContainer"] {
         background: linear-gradient(180deg, #eef2ff 0%, #ecfdf5 55%, #f9fafb 100%);
         color: #111827;
     }
 
-    /* Área principal mais estreita e com respiro */
+    /* Área principal mais estreita e com menos espaço acima */
     .main .block-container {
-        padding-top: 1.5rem;
+        padding-top: 0.5rem;
         padding-bottom: 2.5rem;
         max-width: 1200px;
     }
@@ -373,14 +382,23 @@ MOTIVATIONAL_MESSAGES = [
     "Servidor de compras raiz sabe: planilha bem feita é escudo contra questionamento. Você está reforçando esse escudo agora. 🛡️",
     "Seu trabalho aqui vira escola, veículo, fiscalização, política ambiental. Não é ‘só’ pesquisa de preços. 🌳",
     "O futuro da Lei 14.133 são pessoas como você, que não têm medo de dado nem de processo. Segue firme. 🔍",
+    "Calma, essa consulta demora menos que um processo no TCU (na maioria das vezes). 📚⌛",
+    "Relaxa: enquanto isso roda, tem servidor em outro órgão fazendo pesquisa de preço no Google. Você está anos-luz à frente. 🌌",
+    "Se alguém perguntar, diga que você está conversando com o PNCP. É praticamente diplomacia internacional. 🤝",
+    "Já pensou explicar tudo isso em planilha sem sistema? Pois é, também não quero. Deixa a máquina sofrer no seu lugar. 🤖",
+    "Lembrete: café esfria, mas empenho não. Aproveita esses segundos de loading pra respirar. ☕",
+    "Se essa busca evitar um único sobrepreço, já valeu cada clique. 💰",
 ]
 
 # ============================================================
-# 🚀 EXECUÇÃO DA PESQUISA
+# 🚀 EXECUÇÃO DA PESQUISA (COM MENSAGENS ROTATIVAS)
 # ============================================================
 
 if executar:
-    st.info("Sua pesquisa está sendo preparada. Respira fundo, pega um café e deixa o sistema trabalhar por você. ☕")
+    st.info(
+        "Sua pesquisa está sendo preparada. Respira fundo, pega um café "
+        "e deixa o sistema trabalhar por você. ☕"
+    )
 
     # Converte campos de texto para tipos adequados
     cod_item = _parse_int_or_none(cod_item_str, "Código do item de catálogo")
@@ -408,64 +426,77 @@ if executar:
     else:
         mos = ""
 
-    mensagem_spinner = random.choice(MOTIVATIONAL_MESSAGES)
-    with st.spinner(f"{mensagem_spinner}\n\n(Aguarde: buscando registros no PNCP e montando os arquivos...)"):
-        excel_bytes, html_string, meta = pncp_backend.executar_pesquisa_e_gerar_arquivos(
-            cod_item_catalogo=cod_item,
-            orgao_cnpj=orgao_cnpj,
-            unidade_orgao=unidade_orgao_int,
-            situacao_item=situacao_item,
-            material_ou_servico=mos,
-            codigo_classe=codigo_classe,
-            codigo_grupo=codigo_grupo,
-            cod_fornecedor=cod_fornecedor,
-            tem_resultado=tem_resultado,
-            margem_pref_normal=mpn,
-            nome_base_saida=nome_base or None,
+    # Placeholder para mensagens em tempo real
+    msg_placeholder = st.empty()
+
+    # Queue para receber o resultado da thread
+    resultado_queue: Queue = Queue()
+
+    def _rodar_consulta(q: Queue):
+        """Chama o backend em uma thread separada e devolve o resultado na fila."""
+        try:
+            res = pncp_backend.executar_pesquisa_e_gerar_arquivos(
+                cod_item_catalogo=cod_item,
+                orgao_cnpj=orgao_cnpj,
+                unidade_orgao=unidade_orgao_int,
+                situacao_item=situacao_item,
+                material_ou_servico=mos,
+                codigo_classe=codigo_classe,
+                codigo_grupo=codigo_grupo,
+                cod_fornecedor=cod_fornecedor,
+                tem_resultado=tem_resultado,
+                margem_pref_normal=mpn,
+                nome_base_saida=nome_base or None,
+            )
+            q.put(("ok", res))
+        except Exception as e:
+            q.put(("erro", e))
+
+    # Dispara a thread do backend
+    thread = threading.Thread(target=_rodar_consulta, args=(resultado_queue,), daemon=True)
+    thread.start()
+
+    # Loop de mensagens rotativas a cada ~30 segundos enquanto a consulta roda
+    while thread.is_alive():
+        mensagem_spinner = random.choice(MOTIVATIONAL_MESSAGES)
+        msg_placeholder.info(
+            f"{mensagem_spinner}\n\n"
+            "Aguarde: buscando registros no PNCP e montando os arquivos..."
         )
+        # Intervalo de troca de mensagem
+        time.sleep(30)
 
-    # ========================================================
-    # 📊 APRESENTAÇÃO DOS RESULTADOS
-    # ========================================================
-    base = meta.get("nome_base", "pncp_pesquisa")
+    # Thread terminou, pega o resultado
+    status, payload = resultado_queue.get()
 
-    st.markdown("### Resumo dos filtros aplicados")
-    filtros_efetivos = meta.get("filtros_efetivos", {})
-    if filtros_efetivos:
-        st.json(filtros_efetivos)
+    # Limpa o placeholder de mensagens
+    msg_placeholder.empty()
+
+    if status == "erro":
+        st.error(
+            "Ocorreu um erro ao executar a consulta no PNCP. "
+            "Tente ajustar os filtros ou tentar novamente em instantes."
+        )
     else:
-        st.caption("Nenhum filtro adicional foi aplicado além do período de 12 meses.")
+        excel_bytes, html_string, meta = payload
 
-    if not excel_bytes:
-        st.warning(
-            "Nenhum dado foi encontrado para os filtros informados no período considerado. "
-            "Ainda assim, uma nota técnica foi gerada registrando a tentativa de pesquisa "
-            "no PNCP e os filtros utilizados."
-        )
+        # ========================================================
+        # 📊 APRESENTAÇÃO DOS RESULTADOS
+        # ========================================================
+        base = meta.get("nome_base", "pncp_pesquisa")
 
-        st.download_button(
-            label="⬇️ Baixar nota técnica em HTML",
-            data=html_string.encode("utf-8"),
-            file_name=f"{base}.html",
-            mime="text/html",
-        )
+        st.markdown("### Resumo dos filtros aplicados")
+        filtros_efetivos = meta.get("filtros_efetivos", {})
+        if filtros_efetivos:
+            st.json(filtros_efetivos)
+        else:
+            st.caption("Nenhum filtro adicional foi aplicado além do período de 12 meses.")
 
-        st.subheader("Pré-visualização da nota técnica")
-        st.components.v1.html(html_string, height=700, scrolling=True)
-
-    else:
-        st.success("Pesquisa concluída com sucesso! Bora usar esses dados a seu favor. ✅")
-
-        tab_downloads, tab_preview = st.tabs(["📂 Downloads", "📝 Nota técnica (visualização)"])
-
-        with tab_downloads:
-            st.markdown("#### Arquivos gerados")
-
-            st.download_button(
-                label="⬇️ Baixar planilha Excel",
-                data=excel_bytes,
-                file_name=f"{base}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        if not excel_bytes:
+            st.warning(
+                "Nenhum dado foi encontrado para os filtros informados no período considerado. "
+                "Ainda assim, uma nota técnica foi gerada registrando a tentativa de pesquisa "
+                "no PNCP e os filtros utilizados."
             )
 
             st.download_button(
@@ -475,8 +506,33 @@ if executar:
                 mime="text/html",
             )
 
-            st.caption("Dica: anexe os arquivos ao processo (ex.: no SEI) junto com o ETP ou o TR.")
-
-        with tab_preview:
-            st.subheader("Visualização da nota técnica")
+            st.subheader("Pré-visualização da nota técnica")
             st.components.v1.html(html_string, height=700, scrolling=True)
+
+        else:
+            st.success("Pesquisa concluída com sucesso! Bora usar esses dados a seu favor. ✅")
+
+            tab_downloads, tab_preview = st.tabs(["📂 Downloads", "📝 Nota técnica (visualização)"])
+
+            with tab_downloads:
+                st.markdown("#### Arquivos gerados")
+
+                st.download_button(
+                    label="⬇️ Baixar planilha Excel",
+                    data=excel_bytes,
+                    file_name=f"{base}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+
+                st.download_button(
+                    label="⬇️ Baixar nota técnica em HTML",
+                    data=html_string.encode("utf-8"),
+                    file_name=f"{base}.html",
+                    mime="text/html",
+                )
+
+                st.caption("Dica: anexe os arquivos ao processo (ex.: no SEI) junto com o ETP ou o TR.")
+
+            with tab_preview:
+                st.subheader("Visualização da nota técnica")
+                st.components.v1.html(html_string, height=700, scrolling=True)
