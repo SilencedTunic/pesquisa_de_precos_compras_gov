@@ -1,5 +1,6 @@
+import random
 import streamlit as st
-import pncp_backend  # nosso backend com toda a lógica
+import pncp_backend  # backend com a lógica de consulta e geração de arquivos
 
 # ============================================================
 # ⚙️ CONFIGURAÇÃO BÁSICA DA PÁGINA
@@ -7,39 +8,155 @@ import pncp_backend  # nosso backend com toda a lógica
 
 st.set_page_config(
     page_title="Pesquisa de Preços PNCP – Lei 14.133/2021",
+    page_icon="💸",
     layout="wide",
 )
 
-# Caminho do arquivo de imagem na pasta principal do projeto
 LOGO_PATH = "logos_fortfisc_fundoamazonia.png"
 
-# Pequeno ajuste visual no fundo e nos títulos (CSS leve)
+# ============================================================
+# 🎨 ESTILO GLOBAL (GEN Z VIBES)
+# ============================================================
+
 st.markdown(
     """
     <style>
-    .main {
-        background-color: #f7f9fc;
+    /* Fundo geral com gradiente suave */
+    [data-testid="stAppViewContainer"] {
+        background: radial-gradient(circle at top left, #0f172a 0, #020617 50%, #020617 100%);
+        color: #e5e7eb;
     }
-    .pncp-header {
-        padding: 0.5rem 0 1rem 0;
-        border-bottom: 1px solid #e0e0e0;
-        margin-bottom: 1rem;
+
+    /* Área principal mais estreita e com respiro */
+    .main .block-container {
+        padding-top: 1.5rem;
+        padding-bottom: 2.5rem;
+        max-width: 1200px;
     }
-    .pncp-badge {
-        display: inline-block;
-        padding: 0.2rem 0.6rem;
-        border-radius: 999px;
-        background-color: #e6f2ff;
-        color: #003366;
+
+    /* Hero do cabeçalho */
+    .pncp-hero {
+        padding: 1.5rem 2rem;
+        border-radius: 1.5rem;
+        background: linear-gradient(120deg, rgba(15,23,42,0.96), rgba(30,64,175,0.96));
+        border: 1px solid rgba(148,163,184,0.5);
+        box-shadow: 0 22px 45px rgba(15,23,42,0.75);
+        backdrop-filter: blur(18px);
+        margin-bottom: 1.5rem;
+    }
+
+    .pncp-hero-title {
+        font-size: 2.1rem;
+        font-weight: 800;
+        letter-spacing: 0.03em;
+        color: #f9fafb;
+        margin-bottom: 0.25rem;
+    }
+
+    .pncp-hero-subtitle {
+        font-size: 0.96rem;
+        color: #e5e7eb;
+        margin-bottom: 0.4rem;
+    }
+
+    .pncp-hero-credit {
         font-size: 0.8rem;
-        margin-top: 0.2rem;
+        color: #cbd5f5;
+        font-style: italic;
     }
+
+    .pncp-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding: 0.18rem 0.75rem;
+        border-radius: 999px;
+        background: rgba(248,250,252,0.12);
+        color: #e5e7eb;
+        font-size: 0.76rem;
+        margin-top: 0.45rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+    }
+
+    .pncp-badge-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        background: #22c55e;
+        box-shadow: 0 0 0 4px rgba(34,197,94,0.25);
+    }
+
+    /* Box de ajuda à direita */
     .pncp-help-box {
-        background-color: #ffffff;
-        border-radius: 0.5rem;
-        padding: 0.8rem 1rem;
-        border: 1px solid #e0e0e0;
+        background: rgba(15,23,42,0.85);
+        border-radius: 1rem;
+        padding: 1rem 1.1rem;
+        border: 1px solid rgba(148,163,184,0.5);
         font-size: 0.9rem;
+        color: #e5e7eb;
+    }
+
+    .pncp-help-box ol {
+        margin: 0;
+    }
+
+    .pncp-help-box li {
+        margin-bottom: 0.25rem;
+    }
+
+    /* Títulos das seções */
+    .stMarkdown h2, .stMarkdown h3 {
+        color: #e5e7eb;
+    }
+
+    /* Botão principal estilo pill */
+    div.stButton > button {
+        background: linear-gradient(135deg, #22c55e, #16a34a);
+        color: #0b1220;
+        border-radius: 999px;
+        border: none;
+        padding: 0.55rem 1.4rem;
+        font-weight: 700;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+        font-size: 0.86rem;
+        box-shadow: 0 12px 30px rgba(34,197,94,0.35);
+    }
+    div.stButton > button:hover {
+        background: linear-gradient(135deg, #4ade80, #22c55e);
+        box-shadow: 0 16px 34px rgba(34,197,94,0.5);
+    }
+
+    /* Inputs com leve glow */
+    .stTextInput > div > div > input,
+    .stSelectbox > div > div > select {
+        background-color: rgba(15,23,42,0.9);
+        color: #e5e7eb;
+        border-radius: 0.6rem;
+        border: 1px solid rgba(148,163,184,0.6);
+    }
+
+    /* Expander com visual mais clean */
+    .streamlit-expanderHeader {
+        background: rgba(15,23,42,0.95);
+        color: #e5e7eb;
+        border-radius: 0.7rem;
+        border: 1px solid rgba(148,163,184,0.6);
+    }
+
+    /* Tabs */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 0.4rem;
+    }
+    .stTabs [data-baseweb="tab"] {
+        background: rgba(15,23,42,0.9);
+        border-radius: 999px;
+    }
+
+    /* Mensagens info/sucesso/aviso mais integradas */
+    .stAlert {
+        border-radius: 0.9rem;
     }
     </style>
     """,
@@ -47,161 +164,161 @@ st.markdown(
 )
 
 # ============================================================
-# 🧩 CABEÇALHO COM LOGO
+# 🧩 CABEÇALHO COM LOGO E TÍTULO
 # ============================================================
 
-st.markdown('<div class="pncp-header">', unsafe_allow_html=True)
-
-# Duas colunas: logo à esquerda, título à direita
+st.markdown('<div class="pncp-hero">', unsafe_allow_html=True)
 col_logo, col_titulo = st.columns([1, 3])
 
 with col_logo:
-    # A imagem está na mesma pasta do streamlit_app.py
-    # Se não aparecer, confira o nome/ extensão do arquivo
     st.image(LOGO_PATH, use_column_width=True)
 
 with col_titulo:
-    st.title("Pesquisa de Preços PNCP – Lei 14.133/2021")
-
     st.markdown(
-        "Aplicação para pesquisa de preços no PNCP, "
-        "com geração de planilha Excel e nota técnica em HTML."
-    )
-
-    st.markdown(
-        "_Projeto desenvolvido pela Coordenação de Assuntos Estratégicos de Proteção Ambiental - Copes/Dipro/Ibama_"
-    )
-
-    st.markdown(
-        '<span class="pncp-badge">Janela temporal: últimos 12 meses de inclusão no PNCP</span>',
+        '<div class="pncp-hero-title">Pesquisa de Preços PNCP – Lei 14.133/2021</div>',
         unsafe_allow_html=True,
     )
-
+    st.markdown(
+        '<div class="pncp-hero-subtitle">'
+        'Ferramenta digital para apoiar pesquisas de mercado em compras públicas, '
+        'com base em contratações registradas no PNCP.'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="pncp-hero-credit">'
+        'Projeto da Coordenação de Assuntos Estratégicos de Proteção Ambiental – Copes/Dipro/Ibama'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        """
+        <div class="pncp-badge">
+            <span class="pncp-badge-dot"></span>
+            <span>Janela temporal: últimos 12 meses de inclusão no PNCP</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 st.markdown("</div>", unsafe_allow_html=True)
 
 # ============================================================
-# 🧱 LAYOUT PRINCIPAL – DUAS COLUNAS
+# 🧱 LAYOUT PRINCIPAL – FORMULÁRIO + AJUDA
 # ============================================================
 
 col_filtros, col_ajuda = st.columns([2, 1])
 
 # ------------------------------------------------------------
-# 🧮 COLUNA ESQUERDA – FORMULÁRIO DE FILTROS
+# 🧮 FORMULÁRIO DE FILTROS
 # ------------------------------------------------------------
 with col_filtros:
     with st.form("filtros_pncp"):
         st.subheader("Configuração da pesquisa")
 
         # ---------------- Filtros principais ----------------
-        with st.expander("Filtros principais", expanded=True):
+        with st.expander("🎯 Filtros principais", expanded=True):
             cod_item_str = st.text_input(
-                "Código do item de catálogo (CATMAT/CATSER) – opcional",
-                placeholder="Ex.: 279727",
-                help="Informe o código do item de catálogo, se quiser restringir a pesquisa a um item específico.",
-            )
-            orgao_cnpj = st.text_input(
-                "CNPJ do órgão – opcional",
-                value="",
-                placeholder="Ex.: 00394494000136",
-                help="Número do CNPJ da entidade do órgão (somente números).",
-            )
-            unidade_orgao = st.text_input(
-                "Código da unidade do órgão – opcional",
-                value="",
-                placeholder="Ex.: 200350",
-                help="Código da unidade do órgão responsável pela contratação.",
-            )
-            situacao_item = st.text_input(
-                "Situação do item – opcional",
-                value="",
-                placeholder="Ex.: 4 para 'Deserto'",
-                help="Código da situação do item da compra (ex.: 4 = Deserto, 3 = Fracassado etc.).",
+                "Código do item de catálogo (CATMAT/CATSER)",
+                placeholder="Ex.: 630754",
+                help="Informe o código CATMAT/CATSER, quando já souber exatamente o item que deseja analisar.",
             )
 
             material_ou_servico = st.selectbox(
-                "Material ou Serviço",
-                options=["(sem filtro)", "Material (M)", "Serviço (S)"],
+                "Tipo do objeto",
+                options=["(todos)", "Material (M)", "Serviço (S)"],
                 index=0,
-                help="Selecione se deseja restringir a pesquisa apenas a materiais (M) ou serviços (S).",
+                help="Você pode limitar a busca apenas a materiais (M) ou a serviços (S).",
             )
 
         # ---------------- Filtros avançados ----------------
-        with st.expander("Filtros avançados (opcionais)", expanded=False):
-            col1, col2, col3 = st.columns(3)
-            with col1:
+        with st.expander("🧪 Filtros avançados (opcionais)", expanded=False):
+            st.caption("Use estes campos para refinar a pesquisa quando necessário.")
+
+            col_a1, col_a2, col_a3 = st.columns(3)
+            with col_a1:
+                orgao_cnpj = st.text_input(
+                    "CNPJ do órgão – opcional",
+                    value="",
+                    placeholder="Ex.: 00394494000136",
+                    help="Número do CNPJ da entidade do órgão (somente números).",
+                )
+            with col_a2:
+                unidade_orgao = st.text_input(
+                    "Código da unidade – opcional",
+                    value="",
+                    placeholder="Ex.: 200350",
+                    help="Código da unidade do órgão responsável pela contratação.",
+                )
+            with col_a3:
+                situacao_item = st.text_input(
+                    "Situação do item – opcional",
+                    value="",
+                    placeholder="Ex.: 4 para 'Deserto'",
+                    help="Código da situação do item (ex.: 4 = Deserto, 3 = Fracassado etc.).",
+                )
+
+            col_b1, col_b2, col_b3 = st.columns(3)
+            with col_b1:
                 codigo_classe_str = st.text_input(
                     "Código da classe – opcional",
                     value="",
-                    placeholder="Ex.: 6510",
+                    placeholder="Ex.: 8145",
                     help="Código da classe no catálogo de materiais/serviços.",
                 )
-            with col2:
+            with col_b2:
                 codigo_grupo_str = st.text_input(
                     "Código do grupo – opcional",
                     value="",
                     placeholder="Ex.: 01",
                     help="Código do grupo no catálogo.",
                 )
-            with col3:
+            with col_b3:
                 cod_fornecedor = st.text_input(
                     "Código do fornecedor – opcional",
                     value="",
                     placeholder="Ex.: código interno do fornecedor",
+                    help="Utilize quando quiser focar em um fornecedor específico.",
                 )
 
-            col4, col5, col6 = st.columns(3)
-            with col4:
+            col_c1, col_c2, _ = st.columns(3)
+            with col_c1:
                 tem_resultado_opt = st.selectbox(
-                    "Filtrar por 'temResultado'?",
-                    options=["(não filtrar)", "Somente com resultado", "Somente sem resultado"],
+                    "Resultado da compra",
+                    options=["(todos)", "Somente com resultado", "Somente sem resultado"],
                     index=0,
-                    help="Filtra itens que possuem (ou não) resultado registrado.",
+                    help="Permite mostrar apenas itens que já têm resultado registrado ou ainda não têm.",
                 )
-            with col5:
-                bps_opt = st.selectbox(
-                    "Filtrar BPS?",
-                    options=["(não filtrar)", "Somente BPS verdadeiro", "Somente BPS falso"],
-                    index=0,
-                    help="Filtra se a compra segue (ou não) Boas Práticas de Suprimentos.",
-                )
-            with col6:
+            with col_c2:
                 mpn_opt = st.selectbox(
-                    "Filtrar margem de preferência normal?",
-                    options=["(não filtrar)", "Somente com margem", "Somente sem margem"],
+                    "Margem de preferência normal",
+                    options=["(todos)", "Somente com margem", "Somente sem margem"],
                     index=0,
                     help="Filtra compras com aplicação de margem de preferência normal.",
                 )
-
-            codigo_ncm = st.text_input(
-                "Código NCM – opcional",
-                value="",
-                placeholder="Ex.: 30049099",
-                help="Código NCM – Nomenclatura Comum do Mercosul.",
-            )
 
         # ---------------- Nome base dos arquivos ----------------
         nome_base = st.text_input(
             "Nome base dos arquivos de saída – opcional",
             value="",
-            placeholder="Ex.: pesquisa_algodao_2024",
+            placeholder="Ex.: pesquisa_container_2025",
             help="Se informado, será usado como prefixo do nome da planilha e da nota técnica.",
         )
 
         executar = st.form_submit_button("🔎 Executar pesquisa")
 
 # ------------------------------------------------------------
-# 📖 COLUNA DIREITA – AJUDA, PASSO A PASSO, OBSERVAÇÕES
+# 💡 COLUNA DIREITA – COMO USAR
 # ------------------------------------------------------------
 with col_ajuda:
-    st.subheader("Como utilizar")
+    st.subheader("Guia rápido")
 
     st.markdown(
         """
         <div class="pncp-help-box">
-        <ol style="padding-left: 1.2rem;">
-          <li>Preencha, se desejar, o <strong>item de catálogo</strong> ou a <strong>classe</strong>.</li>
-          <li>Inclua filtros por <strong>CNPJ</strong>, unidade ou situação do item, se necessários.</li>
-          <li>Clique em <strong>“Executar pesquisa”</strong>.</li>
+        <ol style="padding-left: 1.1rem;">
+          <li>Comece pelo <strong>código CATMAT/CATSER</strong> ou pela <strong>classe</strong>.</li>
+          <li>Use os filtros avançados apenas quando precisar afinar a busca.</li>
+          <li>Clique em <strong>“Executar pesquisa”</strong> e aguarde a coleta dos dados.</li>
           <li>Baixe a <strong>planilha Excel</strong> e/ou a <strong>nota técnica em HTML</strong>.</li>
           <li>Anexe os arquivos ao processo (SEI) como evidência da pesquisa de preços.</li>
         </ol>
@@ -216,7 +333,7 @@ with col_ajuda:
         - O período considerado é sempre de **12 meses para trás** a partir da data atual.
         - Se nenhum dado for encontrado, ainda assim será gerada uma **nota técnica**
           registrando a tentativa de pesquisa e os filtros utilizados.
-        - Filtros deixados em branco **não são enviados** à API (não restringem a consulta).
+        - Campos deixados em branco **não restringem a consulta**.
         """
     )
 
@@ -224,14 +341,15 @@ with col_ajuda:
 # 🧠 FUNÇÕES AUXILIARES (FRONTEND)
 # ============================================================
 
-def _opt_to_bool(opt, true_label, false_label):
+def _opt_to_bool(opt: str, true_label: str, false_label: str):
     if opt == true_label:
         return True
     if opt == false_label:
         return False
     return None
 
-def _parse_int_or_none(text, campo_nome):
+
+def _parse_int_or_none(text: str, campo_nome: str):
     """
     Converte texto em int, ou retorna None.
     Em caso de erro, mostra um aviso leve na interface.
@@ -245,12 +363,22 @@ def _parse_int_or_none(text, campo_nome):
         st.warning(f"Valor inválido em '{campo_nome}'. Ignorando este filtro.")
         return None
 
+
+MOTIVATIONAL_MESSAGES = [
+    "Cada pesquisa bem feita é um processo a menos para dar dor de cabeça lá na frente. Você está jogando no time da prevenção. 💼✨",
+    "Compras públicas com critério são política pública na veia. Obrigado por segurar essa linha de frente. 💚",
+    "Enquanto os dados chegam, lembra: transparência também é inovação – e você está empurrando o sistema para frente. 🚀",
+    "Servidor de compras raiz sabe: planilha bem feita é escudo contra questionamento. Você está reforçando esse escudo agora. 🛡️",
+    "Seu trabalho aqui vira escola, veículo, fiscalização, política ambiental. Não é ‘só’ pesquisa de preços. 🌳",
+    "O futuro da Lei 14.133 são pessoas como você, que não têm medo de dado nem de processo. Segue firme. 🔍",
+]
+
 # ============================================================
 # 🚀 EXECUÇÃO DA PESQUISA
 # ============================================================
 
 if executar:
-    st.info("Executando consulta ao PNCP. Isso pode levar alguns segundos...")
+    st.info("Sua pesquisa está sendo preparada. Respira fundo, pega um café e deixa o sistema trabalhar por você. ☕")
 
     # Converte campos de texto para tipos adequados
     cod_item = _parse_int_or_none(cod_item_str, "Código do item de catálogo")
@@ -263,11 +391,6 @@ if executar:
         tem_resultado_opt,
         "Somente com resultado",
         "Somente sem resultado",
-    )
-    bps = _opt_to_bool(
-        bps_opt,
-        "Somente BPS verdadeiro",
-        "Somente BPS falso",
     )
     mpn = _opt_to_bool(
         mpn_opt,
@@ -283,7 +406,8 @@ if executar:
     else:
         mos = ""
 
-    with st.spinner("Consultando API do PNCP e gerando arquivos..."):
+    mensagem_spinner = random.choice(MOTIVATIONAL_MESSAGES)
+    with st.spinner(f"{mensagem_spinner}\n\n(Aguarde: buscando registros no PNCP e montando os arquivos...)"):
         excel_bytes, html_string, meta = pncp_backend.executar_pesquisa_e_gerar_arquivos(
             cod_item_catalogo=cod_item,
             orgao_cnpj=orgao_cnpj,
@@ -294,9 +418,7 @@ if executar:
             codigo_grupo=codigo_grupo,
             cod_fornecedor=cod_fornecedor,
             tem_resultado=tem_resultado,
-            bps=bps,
             margem_pref_normal=mpn,
-            codigo_ncm=codigo_ncm,
             nome_base_saida=nome_base or None,
         )
 
@@ -305,7 +427,6 @@ if executar:
     # ========================================================
     base = meta.get("nome_base", "pncp_pesquisa")
 
-    # Resumo dos filtros efetivos aplicados
     st.markdown("### Resumo dos filtros aplicados")
     filtros_efetivos = meta.get("filtros_efetivos", {})
     if filtros_efetivos:
@@ -314,14 +435,12 @@ if executar:
         st.caption("Nenhum filtro adicional foi aplicado além do período de 12 meses.")
 
     if not excel_bytes:
-        # Não há dados suficientes para montar Excel, mas o HTML ainda é útil
         st.warning(
             "Nenhum dado foi encontrado para os filtros informados no período considerado. "
             "Ainda assim, uma nota técnica foi gerada registrando a tentativa de pesquisa "
-            "no PNCP e os filtros utilizados."
+            "e os filtros utilizados."
         )
 
-        # Download do HTML mesmo sem Excel
         st.download_button(
             label="⬇️ Baixar nota técnica em HTML",
             data=html_string.encode("utf-8"),
@@ -333,15 +452,13 @@ if executar:
         st.components.v1.html(html_string, height=700, scrolling=True)
 
     else:
-        st.success("Pesquisa concluída com sucesso!")
+        st.success("Pesquisa concluída com sucesso! Bora usar esses dados a seu favor. ✅")
 
-        # Abas para organizar área de resultados
         tab_downloads, tab_preview = st.tabs(["📂 Downloads", "📝 Nota técnica (visualização)"])
 
         with tab_downloads:
             st.markdown("#### Arquivos gerados")
 
-            # Download da planilha
             st.download_button(
                 label="⬇️ Baixar planilha Excel",
                 data=excel_bytes,
@@ -349,7 +466,6 @@ if executar:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
-            # Download do HTML
             st.download_button(
                 label="⬇️ Baixar nota técnica em HTML",
                 data=html_string.encode("utf-8"),
@@ -357,7 +473,7 @@ if executar:
                 mime="text/html",
             )
 
-            st.caption("Anexe esses arquivos à instrução processual (por exemplo, no SEI).")
+            st.caption("Dica: anexe os arquivos ao processo (ex.: no SEI) junto com o ETP ou o TR.")
 
         with tab_preview:
             st.subheader("Visualização da nota técnica")
