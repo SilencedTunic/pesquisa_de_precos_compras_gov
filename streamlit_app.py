@@ -19,15 +19,27 @@ st.set_page_config(
 LOGO_PATH = "logos_fortfisc_fundoamazonia.png"
 
 # ============================================================
-# 🎨 ESTILO GLOBAL (TEMA CLARO, MODERNO)
+# 🎨 ESTILO GLOBAL (TEMA CLARO, MODERNO, SEM TARJA BRANCA)
 # ============================================================
 
 st.markdown(
     """
     <style>
-    /* Remove a barra branca padrão do topo (header do Streamlit) */
-    [data-testid="stHeader"] {
+    /* Some tudo que é barra padrão do topo */
+    [data-testid="stHeader"],
+    [data-testid="stToolbar"],
+    [data-testid="stDecoration"] {
         display: none !important;
+    }
+
+    html, body {
+        margin: 0;
+        padding: 0;
+        background: linear-gradient(180deg, #eef2ff 0%, #ecfdf5 55%, #f9fafb 100%);
+    }
+
+    .stApp {
+        background: transparent;
     }
 
     /* Fundo geral em tom claro com gradiente suave */
@@ -388,10 +400,16 @@ MOTIVATIONAL_MESSAGES = [
     "Já pensou explicar tudo isso em planilha sem sistema? Pois é, também não quero. Deixa a máquina sofrer no seu lugar. 🤖",
     "Lembrete: café esfria, mas empenho não. Aproveita esses segundos de loading pra respirar. ☕",
     "Se essa busca evitar um único sobrepreço, já valeu cada clique. 💰",
+    "Você está fazendo com dados o que muita gente promete em discurso. Isso vale mais que mil lives. 🎤",
+    "Se der preguiça, lembra: tem pregão que começou errado porque ninguém olhou direito o histórico de preços. Não será o seu. 🧐",
+    "Pesquisa de preços bem feita é tipo vacinar o processo contra glosa. Parabéns, imunizador orçamentário. 💉",
+    "No tempo desse carregamento, alguém já mandou ‘favor agilizar’ no despacho. Você segue zen. 🧘",
+    "Se o sistema demora, pensa que é o PNCP vasculhando o Brasil inteiro pra te ajudar. Não é pouca coisa. 🇧🇷",
+    "Cada real bem contratado hoje é um problema político a menos amanhã. Você está no front invisível. 🧱",
 ]
 
 # ============================================================
-# 🚀 EXECUÇÃO DA PESQUISA (COM MENSAGENS ROTATIVAS)
+# 🚀 EXECUÇÃO DA PESQUISA (MENSAGENS + PROGRESSO)
 # ============================================================
 
 if executar:
@@ -426,8 +444,9 @@ if executar:
     else:
         mos = ""
 
-    # Placeholder para mensagens em tempo real
+    # Placeholders de feedback em tempo real
     msg_placeholder = st.empty()
+    progress_placeholder = st.progress(0)
 
     # Queue para receber o resultado da thread
     resultado_queue: Queue = Queue()
@@ -456,21 +475,37 @@ if executar:
     thread = threading.Thread(target=_rodar_consulta, args=(resultado_queue,), daemon=True)
     thread.start()
 
-    # Loop de mensagens rotativas a cada ~30 segundos enquanto a consulta roda
+    # Loop de feedback: barra animada + mensagens a cada 15s
+    progress = 0
+    last_msg_change = 0.0
+
     while thread.is_alive():
-        mensagem_spinner = random.choice(MOTIVATIONAL_MESSAGES)
-        msg_placeholder.info(
-            f"{mensagem_spinner}\n\n"
-            "Aguarde: buscando registros no PNCP e montando os arquivos..."
-        )
-        # Intervalo de troca de mensagem
-        time.sleep(30)
+        now = time.time()
+
+        # Atualiza mensagem a cada ~15 segundos
+        if now - last_msg_change >= 15 or last_msg_change == 0:
+            mensagem_spinner = random.choice(MOTIVATIONAL_MESSAGES)
+            msg_placeholder.info(
+                f"{mensagem_spinner}\n\n"
+                "Aguarde: buscando registros no PNCP e montando os arquivos..."
+            )
+            last_msg_change = now
+
+        # Atualiza barra de progresso (fake, só para dar sensação de movimento)
+        progress += 3
+        if progress > 100:
+            progress = 20  # volta um pouco pra não travar em 100%
+        progress_placeholder.progress(progress)
+
+        # Pequena pausa para não travar o app
+        time.sleep(0.3)
 
     # Thread terminou, pega o resultado
     status, payload = resultado_queue.get()
 
-    # Limpa o placeholder de mensagens
+    # Limpa placeholders
     msg_placeholder.empty()
+    progress_placeholder.empty()
 
     if status == "erro":
         st.error(
