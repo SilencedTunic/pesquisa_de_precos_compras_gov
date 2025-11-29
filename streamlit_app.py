@@ -15,16 +15,16 @@ st.set_page_config(
 LOGO_PATH = "logos_fortfisc_fundoamazonia.png"
 
 # ============================================================
-# 🎨 ESTILO GLOBAL (GEN Z VIBES)
+# 🎨 ESTILO GLOBAL (TEMA CLARO, MODERNO)
 # ============================================================
 
 st.markdown(
     """
     <style>
-    /* Fundo geral com gradiente suave */
+    /* Fundo geral em tom claro com gradiente suave */
     [data-testid="stAppViewContainer"] {
-        background: radial-gradient(circle at top left, #0f172a 0, #020617 50%, #020617 100%);
-        color: #e5e7eb;
+        background: linear-gradient(180deg, #eef2ff 0%, #ecfdf5 55%, #f9fafb 100%);
+        color: #111827;
     }
 
     /* Área principal mais estreita e com respiro */
@@ -34,14 +34,13 @@ st.markdown(
         max-width: 1200px;
     }
 
-    /* Hero do cabeçalho */
+    /* Hero do cabeçalho em cartão branco */
     .pncp-hero {
         padding: 1.5rem 2rem;
         border-radius: 1.5rem;
-        background: linear-gradient(120deg, rgba(15,23,42,0.96), rgba(30,64,175,0.96));
-        border: 1px solid rgba(148,163,184,0.5);
-        box-shadow: 0 22px 45px rgba(15,23,42,0.75);
-        backdrop-filter: blur(18px);
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        box-shadow: 0 18px 40px rgba(15,23,42,0.08);
         margin-bottom: 1.5rem;
     }
 
@@ -49,19 +48,19 @@ st.markdown(
         font-size: 2.1rem;
         font-weight: 800;
         letter-spacing: 0.03em;
-        color: #f9fafb;
+        color: #111827;
         margin-bottom: 0.25rem;
     }
 
     .pncp-hero-subtitle {
         font-size: 0.96rem;
-        color: #e5e7eb;
+        color: #4b5563;
         margin-bottom: 0.4rem;
     }
 
     .pncp-hero-credit {
         font-size: 0.8rem;
-        color: #cbd5f5;
+        color: #6b7280;
         font-style: italic;
     }
 
@@ -71,8 +70,8 @@ st.markdown(
         gap: 0.4rem;
         padding: 0.18rem 0.75rem;
         border-radius: 999px;
-        background: rgba(248,250,252,0.12);
-        color: #e5e7eb;
+        background: #eff6ff;
+        color: #1d4ed8;
         font-size: 0.76rem;
         margin-top: 0.45rem;
         text-transform: uppercase;
@@ -89,12 +88,13 @@ st.markdown(
 
     /* Box de ajuda à direita */
     .pncp-help-box {
-        background: rgba(15,23,42,0.85);
+        background: #ffffff;
         border-radius: 1rem;
         padding: 1rem 1.1rem;
-        border: 1px solid rgba(148,163,184,0.5);
+        border: 1px solid #e5e7eb;
         font-size: 0.9rem;
-        color: #e5e7eb;
+        color: #111827;
+        box-shadow: 0 10px 25px rgba(15,23,42,0.04);
     }
 
     .pncp-help-box ol {
@@ -107,13 +107,13 @@ st.markdown(
 
     /* Títulos das seções */
     .stMarkdown h2, .stMarkdown h3 {
-        color: #e5e7eb;
+        color: #111827;
     }
 
     /* Botão principal estilo pill */
     div.stButton > button {
         background: linear-gradient(135deg, #22c55e, #16a34a);
-        color: #0b1220;
+        color: #0b1120;
         border-radius: 999px;
         border: none;
         padding: 0.55rem 1.4rem;
@@ -121,28 +121,29 @@ st.markdown(
         letter-spacing: 0.03em;
         text-transform: uppercase;
         font-size: 0.86rem;
-        box-shadow: 0 12px 30px rgba(34,197,94,0.35);
+        box-shadow: 0 10px 24px rgba(34,197,94,0.35);
     }
     div.stButton > button:hover {
         background: linear-gradient(135deg, #4ade80, #22c55e);
-        box-shadow: 0 16px 34px rgba(34,197,94,0.5);
+        box-shadow: 0 14px 30px rgba(34,197,94,0.5);
     }
 
-    /* Inputs com leve glow */
+    /* Inputs claros */
     .stTextInput > div > div > input,
     .stSelectbox > div > div > select {
-        background-color: rgba(15,23,42,0.9);
-        color: #e5e7eb;
+        background-color: #ffffff;
+        color: #111827;
         border-radius: 0.6rem;
-        border: 1px solid rgba(148,163,184,0.6);
+        border: 1px solid #d1d5db;
     }
 
-    /* Expander com visual mais clean */
+    /* Expander com visual clean */
     .streamlit-expanderHeader {
-        background: rgba(15,23,42,0.95);
-        color: #e5e7eb;
+        background: #f9fafb;
+        color: #111827;
         border-radius: 0.7rem;
-        border: 1px solid rgba(148,163,184,0.6);
+        border: 1px solid #e5e7eb;
+        font-weight: 600;
     }
 
     /* Tabs */
@@ -150,11 +151,12 @@ st.markdown(
         gap: 0.4rem;
     }
     .stTabs [data-baseweb="tab"] {
-        background: rgba(15,23,42,0.9);
+        background: #f3f4f6;
         border-radius: 999px;
+        color: #111827;
     }
 
-    /* Mensagens info/sucesso/aviso mais integradas */
+    /* Mensagens info/sucesso/aviso */
     .stAlert {
         border-radius: 0.9rem;
     }
@@ -438,7 +440,7 @@ if executar:
         st.warning(
             "Nenhum dado foi encontrado para os filtros informados no período considerado. "
             "Ainda assim, uma nota técnica foi gerada registrando a tentativa de pesquisa "
-            "e os filtros utilizados."
+            "no PNCP e os filtros utilizados."
         )
 
         st.download_button(
