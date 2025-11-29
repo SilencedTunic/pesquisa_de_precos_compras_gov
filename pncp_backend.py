@@ -1,97 +1,23 @@
 """
 Coletor automático de itens de contratações PNCP (Lei 14.133/2021)
-Versão 3.3 – Excel + Relatório HTML (sem seção de gráficos).
+Versão 4.0 – Refatorada para flexibilidade total de filtros.
 
-Como usar no Jupyter:
-1. Vá até a seção de CONFIGURAÇÕES BÁSICAS logo abaixo.
-2. Preencha os filtros que você quiser (ou deixe como None / "" para ignorar).
-   - Inclusive o COD_ITEM_CATALOGO é opcional.
-3. Rode a célula inteira.
-4. Ao final, serão gerados:
-   - Um arquivo .xlsx com as abas:
-       • 'dados'            → registros completos
-       • 'resumo_unidade'   → estatísticas por unidadeMedida
-           (resultado + média saneada + limites)
-       • 'preco_referencia' → média, mediana e média saneada por unidade de medida
-   - Um arquivo .html contendo uma nota técnica explicativa da pesquisa de preços,
-     com introdução, filtros, estatísticas, metodologia, resultados
-     e um quadro-resumo de preço de referência por unidade de medida.
-
-A janela temporal é sempre: hoje até 1 ano atrás (365 dias).
+Este módulo é o backend de processamento. Ele não depende de configurações globais
+hardcoded. Todos os parâmetros devem ser passados via função 'executar_pesquisa_e_gerar_arquivos'.
 """
 
-# ============================================================
-# 🔧 CONFIGURAÇÕES BÁSICAS (EDITE AQUI)
-# ============================================================
-
-# Informe aqui o código do item de catálogo (CATMAT/CATSER).
-# Deixe como None se não quiser filtrar por codItemCatalogo.
-COD_ITEM_CATALOGO = None  # ex.: 279727 ou None
-
-# Filtros opcionais (defina os valores desejados ou deixe como None/"" para ignorar)
-ORGAO_ENTIDADE_CNPJ = ""                 # string ou "" para ignorar
-UNIDADE_ORGAO_CODIGO_UNIDADE = None      # int ou None
-SITUACAO_COMPRA_ITEM = ""                # string (ex.: "4") ou "" para ignorar
-
-# MATERIAL_OU_SERVICO:
-#   "M"  → Material
-#   "S"  → Serviço
-#   None ou "" → não envia o parâmetro (pega tudo)
-MATERIAL_OU_SERVICO = ""                 # "M", "S" ou None/""
-
-CODIGO_CLASSE = None                     # int ou None (permite consulta só por classe)
-CODIGO_GRUPO = None                      # int ou None
-COD_FORNECEDOR = ""                      # string ou "" para ignorar
-FILTRAR_TEM_RESULTADO = None             # True, False ou None
-FILTRAR_BPS = None                       # True, False ou None
-FILTRAR_MARGEM_PREFERENCIA_NORMAL = None # True, False ou None
-CODIGO_NCM = ""                          # string ou "" para ignorar
-
-# Opcional: nome base dos arquivos de saída (sem extensão).
-# Se deixar None, será gerado automaticamente.
-NOME_BASE_SAIDA = None  # ex.: "pesquisa_preco_catmat_279727"
-
-
-# ============================================================
-# 📦 IMPORTAÇÕES
-# ============================================================
-
-try:
-    import requests
-except ImportError as exc:
-    print("❌ Erro: a biblioteca 'requests' não está instalada.")
-    print("   Instale com: pip install requests")
-    raise exc
-
-try:
-    import pandas as pd
-except ImportError as exc:
-    print("❌ Erro: a biblioteca 'pandas' não está instalada.")
-    print("   Instale com: pip install pandas")
-    raise exc
-
-try:
-    import matplotlib.pyplot as plt
-except ImportError as exc:
-    print("❌ Erro: a biblioteca 'matplotlib' não está instalada.")
-    print("   Instale com: pip install matplotlib")
-    raise exc
-
-try:
-    import openpyxl  # garante engine do Excel
-except ImportError as exc:
-    print("❌ Erro: a biblioteca 'openpyxl' não está instalada.")
-    print("   Instale com: pip install openpyxl")
-    raise exc
-
-import base64
-from io import BytesIO
-from datetime import date, timedelta
+import requests
+import pandas as pd
 import numpy as np
-
+import openpyxl  # Engine do Excel
+import base64
+import os
+import io
+from datetime import date, timedelta
+from io import BytesIO
 
 # ============================================================
-# 🗓️ INTERVALO DE 1 ANO
+# 🛠️ UTILITÁRIOS GERAIS
 # ============================================================
 
 def calcular_intervalo_ultimo_ano():
@@ -103,881 +29,460 @@ def calcular_intervalo_ultimo_ano():
     data_inicial = data_final - timedelta(days=365)
     return data_inicial.strftime("%Y-%m-%d"), data_final.strftime("%Y-%m-%d")
 
-
-# ============================================================
-# 🔄 AJUDANTES PARA FILTROS OPCIONAIS
-# ============================================================
-
 def bool_to_api_flag(value):
     """
-    Converte True/False em 'true'/'false' para a API.
-    Retorna None se value não for booleano.
+    Converte True/False/None em 'true'/'false'/None para a API.
     """
     if isinstance(value, bool):
         return "true" if value else "false"
     return None
 
-
-def montar_filtros_opcionais():
+def limpar_valor(valor):
     """
-    Lê as variáveis de configuração no topo e monta o dicionário
-    de parâmetros opcionais a ser enviado para a API.
-    Só inclui parâmetros que não forem None/vazios.
+    Retorna o valor se ele for válido (não vazio, não None), senão retorna None.
+    Usado para garantir que strings vazias não sejam enviadas à API.
     """
-    filtros = {}
+    if valor is None:
+        return None
+    if isinstance(valor, str):
+        s = valor.strip()
+        return s if s else None
+    return valor
 
-    if ORGAO_ENTIDADE_CNPJ:
-        filtros["orgaoEntidadeCnpj"] = ORGAO_ENTIDADE_CNPJ
+def montar_parametros_consulta(
+    data_inicial,
+    data_final,
+    cod_item_catalogo=None,
+    orgao_cnpj=None,
+    unidade_orgao=None,
+    situacao_item=None,
+    material_ou_servico=None,
+    codigo_classe=None,
+    codigo_grupo=None,
+    cod_fornecedor=None,
+    tem_resultado=None,
+    bps=None,
+    margem_pref_normal=None,
+    codigo_ncm=None
+):
+    """
+    Constrói o dicionário de parâmetros limpo para enviar à API.
+    Remove chaves com valores None ou vazios para não quebrar a consulta.
+    """
+    # Dicionário bruto com todos os possíveis filtros
+    raw_params = {
+        "dataInclusaoPncpInicial": data_inicial,
+        "dataInclusaoPncpFinal": data_final,
+        "codItemCatalogo": limpar_valor(cod_item_catalogo),
+        "orgaoEntidadeCnpj": limpar_valor(orgao_cnpj),
+        "unidadeOrgaoCodigoUnidade": limpar_valor(unidade_orgao),
+        "situacaoCompraItem": limpar_valor(situacao_item),
+        "materialOuServico": limpar_valor(material_ou_servico),
+        "codigoClasse": limpar_valor(codigo_classe),
+        "codigoGrupo": limpar_valor(codigo_grupo),
+        "codFornecedor": limpar_valor(cod_fornecedor),
+        "temResultado": bool_to_api_flag(tem_resultado),
+        "bps": bool_to_api_flag(bps),
+        "margemPreferenciaNormal": bool_to_api_flag(margem_pref_normal),
+        "codigoNCM": limpar_valor(codigo_ncm),
+    }
 
-    if UNIDADE_ORGAO_CODIGO_UNIDADE is not None:
-        filtros["unidadeOrgaoCodigoUnidade"] = int(UNIDADE_ORGAO_CODIGO_UNIDADE)
-
-    if SITUACAO_COMPRA_ITEM:
-        filtros["situacaoCompraItem"] = SITUACAO_COMPRA_ITEM
-
-    if MATERIAL_OU_SERVICO:
-        filtros["materialOuServico"] = MATERIAL_OU_SERVICO
-
-    if CODIGO_CLASSE is not None:
-        filtros["codigoClasse"] = int(CODIGO_CLASSE)
-
-    if CODIGO_GRUPO is not None:
-        filtros["codigoGrupo"] = int(CODIGO_GRUPO)
-
-    if COD_FORNECEDOR:
-        filtros["codFornecedor"] = COD_FORNECEDOR
-
-    flag_tr = bool_to_api_flag(FILTRAR_TEM_RESULTADO)
-    if flag_tr is not None:
-        filtros["temResultado"] = flag_tr
-
-    flag_bps = bool_to_api_flag(FILTRAR_BPS)
-    if flag_bps is not None:
-        filtros["bps"] = flag_bps
-
-    flag_mpn = bool_to_api_flag(FILTRAR_MARGEM_PREFERENCIA_NORMAL)
-    if flag_mpn is not None:
-        filtros["margemPreferenciaNormal"] = flag_mpn
-
-    if CODIGO_NCM:
-        filtros["codigoNCM"] = CODIGO_NCM
-
-    return filtros
-
+    # Remove chaves que ficaram com valor None
+    params_limpos = {k: v for k, v in raw_params.items() if v is not None}
+    
+    return params_limpos
 
 # ============================================================
-# 🌐 CHAMADA PAGINADA À API
+# 🌐 CONSULTA À API (CORE)
 # ============================================================
 
-def buscar_itens_pncp(cod_item_catalogo, data_inicial, data_final,
-                      filtros_opcionais=None, tamanho_pagina=500):
+def buscar_itens_pncp(params_base, tamanho_pagina=500):
     """
-    Faz chamadas paginadas ao endpoint:
-      /modulo-contratacoes/2_consultarItensContratacoes_PNCP_14133
-
-    Parâmetros mínimos:
-      - dataInclusaoPncpInicial
-      - dataInclusaoPncpFinal
-
-    'cod_item_catalogo' é opcional (pode ser None).
-    'filtros_opcionais' pode conter qualquer outro parâmetro aceito pela API.
-
-    Retorna:
-      - Lista de dicionários (cada dicionário é um item retornado pela API).
+    Faz a paginação automática na API do PNCP usando os parâmetros fornecidos.
+    
+    Args:
+        params_base (dict): Dicionário contendo datas e filtros já limpos.
+        tamanho_pagina (int): Itens por página (padrão 500).
+    
+    Returns:
+        list: Lista consolidada de dicionários (registros).
     """
-    base_url = (
-        "https://dadosabertos.compras.gov.br/"
-        "modulo-contratacoes/2_consultarItensContratacoes_PNCP_14133"
-    )
-
+    base_url = "https://dadosabertos.compras.gov.br/modulo-contratacoes/2_consultarItensContratacoes_PNCP_14133"
+    
     pagina = 1
     todos_resultados = []
-    filtros_opcionais = filtros_opcionais or {}
-
-    print("==============================================")
-    print(" Iniciando coleta na API Compras.gov.br (v3.3)")
-    print(" Intervalo de inclusão PNCP:", data_inicial, "até", data_final)
-    if cod_item_catalogo is not None:
-        print(" codItemCatalogo:", cod_item_catalogo)
-    else:
-        print(" codItemCatalogo: não informado (consulta sem filtro de item).")
-    print(" Filtros opcionais:",
-          filtros_opcionais if filtros_opcionais else "nenhum")
-    print("==============================================")
+    
+    print(f"📡 Iniciando consulta ao PNCP...")
+    print(f"   Parâmetros efetivos: {params_base}")
 
     while True:
-        # Parâmetros obrigatórios
-        params = {
-            "pagina": pagina,
-            "tamanhoPagina": tamanho_pagina,
-            "dataInclusaoPncpInicial": data_inicial,
-            "dataInclusaoPncpFinal": data_final,
-        }
+        # Atualiza a página atual nos parâmetros
+        params_request = params_base.copy()
+        params_request["pagina"] = pagina
+        params_request["tamanhoPagina"] = tamanho_pagina
 
-        # Parâmetro opcional codItemCatalogo
-        if cod_item_catalogo is not None:
-            params["codItemCatalogo"] = cod_item_catalogo
-
-        # Demais filtros opcionais
-        for k, v in filtros_opcionais.items():
-            params[k] = v
-
-        print(f"▶ Buscando página {pagina}...")
         try:
-            resp = requests.get(base_url, params=params, timeout=60)
+            resp = requests.get(base_url, params=params_request, timeout=60)
         except Exception as exc:
-            print("❌ Erro de conexão ao chamar a API.")
-            print("   Detalhes:", exc)
+            print(f"❌ Erro de conexão na página {pagina}: {exc}")
             break
 
         if resp.status_code != 200:
             print(f"❌ Erro HTTP {resp.status_code} na página {pagina}.")
-            print("   Trecho da resposta:", resp.text[:500])
+            print(f"   URL chamada: {resp.url}")
             break
 
         try:
             dados = resp.json()
         except ValueError:
-            print("❌ Erro ao interpretar a resposta como JSON.")
-            print("   Conteúdo recebido (início):")
-            print(resp.text[:500])
+            print("❌ Erro ao decodificar JSON da resposta.")
             break
 
         resultados_pagina = dados.get("resultado", [])
-
+        total_paginas = dados.get("totalPaginas", 1)
+        
         if not resultados_pagina:
-            print("⚠ Nenhum registro nesta página. Encerrando paginação.")
+            print(f"ℹ️ Página {pagina} retornou vazia. Encerrando.")
             break
 
         todos_resultados.extend(resultados_pagina)
-
-        total_paginas = dados.get("totalPaginas")
-        paginas_restantes = dados.get("paginasRestantes")
-
-        print(
-            f"   → Página {pagina} retornou {len(resultados_pagina)} registros. "
-            f"Total acumulado: {len(todos_resultados)}"
-        )
+        print(f"   ✅ Página {pagina}/{total_paginas} carregada ({len(resultados_pagina)} itens). Total acumulado: {len(todos_resultados)}")
 
         # Critérios de parada
-        if paginas_restantes in (0, None):
-            print("✅ Paginação concluída (sem páginas restantes).")
+        if pagina >= total_paginas:
             break
-
-        if total_paginas is not None and pagina >= total_paginas:
-            print("✅ Paginação concluída (atingido totalPaginas informado).")
-            break
-
+            
         pagina += 1
-
-    print("----------------------------------------------")
-    print(f" Coleta finalizada com {len(todos_resultados)} registros.")
-    print("----------------------------------------------")
 
     return todos_resultados
 
-
 # ============================================================
-# 📊 MÉDIA SANEADA, RESUMO E PREÇO DE REFERÊNCIA
+# 📊 CÁLCULOS ESTATÍSTICOS (MÉDIA SANEADA)
 # ============================================================
 
 def calcular_media_sanada_serie(serie: pd.Series, cv_limite: float = 25.0) -> float:
     """
-    Calcula a média saneada de uma série numérica.
-    (expurgo iterativo por desvio-padrão até CV <= limite, ou devolve média simples)
+    Calcula a média saneada (expurgo iterativo de outliers).
     """
     s = pd.to_numeric(serie.dropna(), errors="coerce").dropna()
     if s.empty:
         return float("nan")
 
+    # Loop de saneamento
     while True:
         m = s.mean()
         dp = s.std(ddof=0)
-        if m == 0 or pd.isna(m) or pd.isna(dp) or len(s) < 3:
+        
+        # Se só tem 1 ou 2 itens, ou média zero, não há como sanear mais
+        if len(s) < 3 or m == 0 or pd.isna(m) or pd.isna(dp):
             return m
 
         cv = abs(dp / m) * 100.0
         if cv <= cv_limite:
             return m
 
+        # Define limites para corte
         li = m - dp
         ls = m + dp
+        
+        # Filtra (mantém o que está dentro de M +/- DP)
         filtrado = s[(s >= li) & (s <= ls)]
 
+        # Se não excluiu ninguém ou excluiu todo mundo (caso raro), para
         if len(filtrado) == len(s) or filtrado.empty:
             return m
 
         s = filtrado
 
-
 def calcular_resumo_por_unidade(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Considera apenas 'valorUnitarioResultado' para o resumo estatístico;
-    inclui:
-      - media_sanada
-      - limite_inferior_intervalo
-      - limite_superior_intervalo
+    Gera estatísticas agrupadas por unidade de medida.
     """
-    if df.empty or "unidadeMedida" not in df.columns:
+    if df.empty or "unidadeMedida" not in df.columns or "valorUnitarioResultado" not in df.columns:
         return pd.DataFrame()
 
     df_local = df.copy()
+    df_local["valorUnitarioResultado"] = pd.to_numeric(df_local["valorUnitarioResultado"], errors="coerce")
 
-    if "valorUnitarioResultado" not in df_local.columns:
-        return pd.DataFrame()
-
-    df_local["valorUnitarioResultado"] = pd.to_numeric(
-        df_local["valorUnitarioResultado"], errors="coerce"
-    )
-
+    # Agrupamento
     grp = df_local.groupby("unidadeMedida")["valorUnitarioResultado"]
 
-    resumo_base = (
-        grp.agg(["count", "mean", "median", "std", "min", "max"])
-        .rename(
-            columns={
-                "count": "resultado_qtde",
-                "mean": "resultado_media",
-                "median": "resultado_mediana",
-                "std": "resultado_desvio_padrao",
-                "min": "resultado_minimo",
-                "max": "resultado_maximo",
-            }
-        )
-    )
+    # Estatísticas básicas
+    resumo = grp.agg(["count", "mean", "median", "std", "min", "max"]).rename(columns={
+        "count": "resultado_qtde",
+        "mean": "resultado_media",
+        "median": "resultado_mediana",
+        "std": "resultado_desvio_padrao",
+        "min": "resultado_minimo",
+        "max": "resultado_maximo",
+    })
 
+    # Média Saneada
     media_sanada = grp.apply(calcular_media_sanada_serie).rename("media_sanada")
+    resumo = resumo.join(media_sanada, how="left")
 
-    resumo = resumo_base.join(media_sanada, how="left")
+    # Intervalos de confiança simples (Base +/- DP)
+    # A base preferencial é a média saneada; se nula, usa média ou mediana
+    base_calc = resumo["media_sanada"].fillna(resumo["resultado_media"]).fillna(resumo["resultado_mediana"])
+    dp_calc = resumo["resultado_desvio_padrao"].fillna(0)
 
-    for col in ["resultado_desvio_padrao", "media_sanada",
-                "resultado_media", "resultado_mediana"]:
-        if col in resumo.columns:
-            resumo[col] = pd.to_numeric(resumo[col], errors="coerce")
+    resumo["limite_inferior_intervalo"] = (base_calc - dp_calc).clip(lower=0)
+    resumo["limite_superior_intervalo"] = (base_calc + dp_calc).clip(lower=0)
 
-    base = resumo["media_sanada"].copy()
-    mask_nan = base.isna()
-    if "resultado_media" in resumo.columns:
-        base[mask_nan] = resumo.loc[mask_nan, "resultado_media"]
-        mask_nan = base.isna()
-    if "resultado_mediana" in resumo.columns:
-        base[mask_nan] = resumo.loc[mask_nan, "resultado_mediana"]
-
-    dp = resumo["resultado_desvio_padrao"].fillna(0)
-    resumo["limite_inferior_intervalo"] = (base - dp).clip(lower=0)
-    resumo["limite_superior_intervalo"] = (base + dp).clip(lower=0)
-
-    resumo = resumo.reset_index().sort_values("unidadeMedida")
-    return resumo
-
+    return resumo.reset_index().sort_values("unidadeMedida")
 
 def montar_preco_referencia(resumo_df: pd.DataFrame) -> pd.DataFrame:
     """
-    Monta aba 'preco_referencia' com:
-      unidadeMedida, media, mediana, media_sanada
+    Cria uma tabela simplificada para consulta rápida.
     """
-    if resumo_df is None or resumo_df.empty:
+    if resumo_df.empty:
         return pd.DataFrame()
-
-    df = resumo_df.copy()
-
-    for col in ["resultado_media", "resultado_mediana", "media_sanada"]:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    colunas_necessarias = [
-        "unidadeMedida",
-        "resultado_media",
-        "resultado_mediana",
-        "media_sanada",
-    ]
-    colunas_existentes = [c for c in colunas_necessarias if c in df.columns]
-    df_out = df[colunas_existentes].copy()
-
-    renomear = {}
-    if "resultado_media" in df_out.columns:
-        renomear["resultado_media"] = "media"
-    if "resultado_mediana" in df_out.columns:
-        renomear["resultado_mediana"] = "mediana"
-
-    df_out = df_out.rename(columns=renomear)
-    df_out = df_out.sort_values("unidadeMedida")
-
+        
+    cols = ["unidadeMedida", "resultado_media", "resultado_mediana", "media_sanada"]
+    # Seleciona apenas as que existem
+    cols_existentes = [c for c in cols if c in resumo_df.columns]
+    
+    df_out = resumo_df[cols_existentes].copy()
+    
+    # Renomeia para ficar mais amigável
+    rename_map = {
+        "resultado_media": "media",
+        "resultado_mediana": "mediana"
+    }
+    df_out = df_out.rename(columns=rename_map)
     return df_out
 
-
-# ============================================================
-# 💾 PREPARAR DATAFRAMES + SALVAR EM EXCEL
-# ============================================================
-
-def preparar_dataframes(dados: list) -> tuple:
+def preparar_dataframes(lista_dados):
     """
-    A partir da lista de dicionários retornada pela API,
-    monta:
-      - df_dados         → DataFrame completo
-      - resumo_df        → resumo por unidadeMedida
-      - preco_ref_df     → tabela de preço de referência (resumida)
+    Transforma lista de dicts em DataFrames processados.
     """
-    df = pd.DataFrame(dados)
+    df = pd.DataFrame(lista_dados)
+    
     if df.empty:
-        return df, pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
-    colunas_prioritarias = [
-        "idContratacaoPNCP",
-        "idCompra",
-        "idCompraItem",
-        "orgaoEntidadeCnpj",
-        "unidadeOrgaoCodigoUnidade",
-        "descricaoResumida",
-        "descricaodetalhada",
-        "materialOuServicoNome",
-        "codigoClasse",
-        "codigoGrupo",
-        "codItemCatalogo",
-        "unidadeMedida",
-        "quantidade",
-        "valorUnitarioEstimado",
-        "valorTotal",
-        "quantidadeResultado",
-        "valorUnitarioResultado",
-        "valorTotalResultado",
-        "situacaoCompraItemNome",
-        "nomeFornecedor",
-        "dataInclusaoPncp",
-        "dataAtualizacaoPncp",
-        "dataResultado",
-        "codigoNCM",
-        "descricaoNCM",
+    # Colunas de interesse para ordenação visual no Excel
+    cols_order = [
+        "idContratacaoPNCP", "idCompra", "orgaoEntidadeCnpj", "unidadeOrgaoCodigoUnidade",
+        "descricaoResumida", "materialOuServicoNome", "codigoClasse", "codItemCatalogo",
+        "unidadeMedida", "quantidade", "valorUnitarioEstimado", 
+        "valorUnitarioResultado", "valorTotalResultado", 
+        "situacaoCompraItemNome", "nomeFornecedor", "dataInclusaoPncp"
     ]
-    colunas_existentes = [c for c in colunas_prioritarias if c in df.columns]
-    outras_colunas = [c for c in df.columns if c not in colunas_existentes]
-    df = df[colunas_existentes + outras_colunas]
+    # Mantém colunas existentes, adiciona as extras no final
+    cols_existentes = [c for c in cols_order if c in df.columns]
+    cols_extras = [c for c in df.columns if c not in cols_existentes]
+    df = df[cols_existentes + cols_extras]
 
     resumo_df = calcular_resumo_por_unidade(df)
-    preco_ref_df = montar_preco_referencia(resumo_df) if not resumo_df.empty else pd.DataFrame()
+    preco_ref_df = montar_preco_referencia(resumo_df)
 
     return df, resumo_df, preco_ref_df
 
-
-def salvar_resultados_em_excel(df_dados, resumo_df, preco_ref_df, caminho_arquivo):
-    """
-    Salva em Excel:
-      - Aba 'dados'            → registros detalhados
-      - Aba 'resumo_unidade'   → estatísticas por unidadeMedida
-      - Aba 'preco_referencia' → média, mediana e média saneada
-    """
-    if df_dados is None or df_dados.empty:
-        print("⚠ Nenhum dado para salvar em Excel.")
-        return
-
-    print(f"💾 Salvando arquivo Excel em: {caminho_arquivo}")
-    with pd.ExcelWriter(caminho_arquivo, engine="openpyxl") as writer:
-        df_dados.to_excel(writer, index=False, sheet_name="dados")
-        if resumo_df is not None and not resumo_df.empty:
-            resumo_df.to_excel(writer, index=False, sheet_name="resumo_unidade")
-        if preco_ref_df is not None and not preco_ref_df.empty:
-            preco_ref_df.to_excel(writer, index=False, sheet_name="preco_referencia")
-
-    print("✅ Arquivo Excel gerado com sucesso.")
-
-
 # ============================================================
-# 📝 RELATÓRIO HTML (NOTA TÉCNICA, SEM SEÇÃO DE GRÁFICOS)
+# 📝 GERAÇÃO DE RELATÓRIO HTML
 # ============================================================
 
-def _fig_to_base64img(fig):
+def gerar_relatorio_html(df_dados, resumo_df, preco_ref_df, meta, caminho_saida):
     """
-    Helper mantido apenas por compatibilidade (não é usado nesta versão).
+    Gera o HTML da Nota Técnica.
     """
-    buf = BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight")
-    plt.close(fig)
-    buf.seek(0)
-    b64 = base64.b64encode(buf.read()).decode("utf-8")
-    return f"data:image/png;base64,{b64}"
-
-
-def gerar_relatorio_html(df_dados: pd.DataFrame,
-                         resumo_df: pd.DataFrame,
-                         preco_ref_df: pd.DataFrame,
-                         meta: dict,
-                         caminho_html: str):
-    """
-    Gera relatório HTML em formato de nota técnica, SEM a seção 5 (gráficos).
-    Mantém:
-      1. Introdução
-      2. Período e filtros
-      3. Estatísticas descritivas
-      4. Metodologia
-      6. Resultados e uso recomendado
-      7. Quadro-resumo de preço de referência
-    """
-    print(f"📝 Gerando relatório HTML em: {caminho_html}")
-
     total_registros = len(df_dados)
-    if "unidadeMedida" in df_dados.columns:
-        unidades_distintas = int(df_dados["unidadeMedida"].nunique())
-    else:
-        unidades_distintas = 0
-
-    # Estatísticas de valorUnitarioResultado
-    estat_resultado = {}
-    if "valorUnitarioResultado" in df_dados.columns:
-        serie = pd.to_numeric(df_dados["valorUnitarioResultado"], errors="coerce").dropna()
-        if not serie.empty:
-            estat_resultado = {
-                "min": float(serie.min()),
-                "max": float(serie.max()),
-                "mean": float(serie.mean()),
-                "median": float(serie.median()),
-                "std": float(serie.std(ddof=0)),
-            }
-
-    # Tabela de filtros
-    filtros_html_rows = ""
-    for chave, valor in meta.get("filtros_efetivos", {}).items():
-        filtros_html_rows += f"<tr><td>{chave}</td><td>{valor}</td></tr>\n"
-
-    # Estatísticas globais
-    estat_html_rows = ""
-    for k, v in estat_resultado.items():
-        estat_html_rows += f"<tr><td>{k}</td><td>{v:.4f}</td></tr>\n"
-
+    unidades_distintas = df_dados["unidadeMedida"].nunique() if "unidadeMedida" in df_dados.columns else 0
     hoje_str = date.today().strftime("%d/%m/%Y")
 
-    # Quadro-resumo de preço de referência
-    quadro_html_rows = ""
-    if preco_ref_df is not None and not preco_ref_df.empty:
-        quadro_df = preco_ref_df.copy()
-        for col in ["media", "mediana", "media_sanada"]:
-            if col in quadro_df.columns:
-                quadro_df[col] = pd.to_numeric(quadro_df[col], errors="coerce")
+    # Monta linhas da tabela de filtros
+    filtros_rows = ""
+    for k, v in meta.get("filtros_efetivos", {}).items():
+        filtros_rows += f"<tr><td>{k}</td><td>{v}</td></tr>"
 
-        quadro_df["preco_referencia"] = quadro_df.get("media_sanada")
-        if "mediana" in quadro_df.columns:
-            mask_nan = quadro_df["preco_referencia"].isna()
-            quadro_df.loc[mask_nan, "preco_referencia"] = quadro_df.loc[mask_nan, "mediana"]
-        if "media" in quadro_df.columns:
-            mask_nan = quadro_df["preco_referencia"].isna()
-            quadro_df.loc[mask_nan, "preco_referencia"] = quadro_df.loc[mask_nan, "media"]
+    # Monta linhas do Quadro Resumo
+    quadro_rows = ""
+    if not preco_ref_df.empty and not resumo_df.empty:
+        # Merge para pegar os limites
+        full_ref = preco_ref_df.merge(
+            resumo_df[["unidadeMedida", "limite_inferior_intervalo", "limite_superior_intervalo"]],
+            on="unidadeMedida", how="left"
+        )
+        
+        for _, row in full_ref.iterrows():
+            um = row.get("unidadeMedida", "-")
+            media = f"{row.get('media', 0):.4f}"
+            mediana = f"{row.get('mediana', 0):.4f}"
+            saneada = f"{row.get('media_sanada', 0):.4f}"
+            li = f"{row.get('limite_inferior_intervalo', 0):.4f}"
+            ls = f"{row.get('limite_superior_intervalo', 0):.4f}"
+            
+            quadro_rows += f"""
+            <tr>
+                <td>{um}</td>
+                <td>{media}</td>
+                <td>{mediana}</td>
+                <td><strong>{saneada}</strong></td>
+                <td>{saneada}</td>
+                <td>{li}</td>
+                <td>{ls}</td>
+            </tr>
+            """
 
-        if resumo_df is not None and not resumo_df.empty:
-            limites = resumo_df[[
-                "unidadeMedida",
-                "limite_inferior_intervalo",
-                "limite_superior_intervalo"
-            ]].copy()
-            quadro_df = quadro_df.merge(limites, on="unidadeMedida", how="left")
+    html_content = f"""
+    <!DOCTYPE html>
+    <html lang="pt-BR">
+    <head>
+        <meta charset="UTF-8">
+        <title>Nota Técnica - Pesquisa de Preços PNCP</title>
+        <style>
+            body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 40px; color: #333; }}
+            h1 {{ color: #003366; border-bottom: 2px solid #003366; padding-bottom: 10px; }}
+            h2 {{ color: #00509e; margin-top: 30px; }}
+            table {{ width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.9em; }}
+            th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+            th {{ background-color: #f2f2f2; color: #003366; }}
+            tr:nth-child(even) {{ background-color: #f9f9f9; }}
+            .box {{ background: #eef; padding: 15px; border-radius: 5px; border: 1px solid #ccf; }}
+        </style>
+    </head>
+    <body>
+        <h1>Nota Técnica de Pesquisa de Preços (Lei 14.133/2021)</h1>
+        <p><strong>Data de geração:</strong> {hoje_str}</p>
+        
+        <h2>1. Parâmetros da Pesquisa</h2>
+        <div class="box">
+            <p><strong>Intervalo Temporal:</strong> {meta.get('data_inicial')} a {meta.get('data_final')}</p>
+            <table>
+                <tr><th>Filtro</th><th>Valor Aplicado</th></tr>
+                {filtros_rows}
+            </table>
+        </div>
 
-        quadro_df = quadro_df.sort_values("unidadeMedida")
+        <h2>2. Metodologia</h2>
+        <p>Os dados foram extraídos da API de Dados Abertos do PNCP. A <strong>Média Saneada</strong> foi calculada utilizando um método iterativo para exclusão de outliers (Coefficient of Variation > 25%).</p>
+        
+        <h2>3. Resumo da Amostra</h2>
+        <p>Foram encontrados <strong>{total_registros}</strong> registros válidos distribuídos em <strong>{unidades_distintas}</strong> unidades de medida.</p>
 
-        def fmt(x):
-            try:
-                return f"{float(x):.4f}"
-            except Exception:
-                return ""
-
-        for _, row in quadro_df.iterrows():
-            um = row.get("unidadeMedida", "")
-            media = row.get("media", float("nan"))
-            mediana = row.get("mediana", float("nan"))
-            media_sanada = row.get("media_sanada", float("nan"))
-            pr = row.get("preco_referencia", float("nan"))
-            li = row.get("limite_inferior_intervalo", float("nan"))
-            ls = row.get("limite_superior_intervalo", float("nan"))
-
-            quadro_html_rows += (
-                "<tr>"
-                f"<td>{um}</td>"
-                f"<td>{fmt(media)}</td>"
-                f"<td>{fmt(mediana)}</td>"
-                f"<td>{fmt(media_sanada)}</td>"
-                f"<td>{fmt(pr)}</td>"
-                f"<td>{fmt(li)}</td>"
-                f"<td>{fmt(ls)}</td>"
-                "</tr>\n"
-            )
-
-    # HTML
-    html = f"""
-<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-<meta charset="UTF-8">
-<title>Relatório de Pesquisa de Preços – PNCP</title>
-<style>
-body {{ font-family: Arial, sans-serif; margin: 20px; }}
-h1, h2, h3 {{ color: #333; }}
-table {{ border-collapse: collapse; width: 100%; margin-bottom: 20px; }}
-th, td {{ border: 1px solid #ccc; padding: 8px; text-align: left; }}
-th {{ background-color: #f0f0f0; }}
-.section {{ margin-bottom: 30px; }}
-small {{ color: #555; }}
-</style>
-</head>
-<body>
-
-<h1>Relatório de Pesquisa de Preços – PNCP (Lei 14.133/2021)</h1>
-<p><small>Relatório gerado em {hoje_str}</small></p>
-
-<div class="section">
-<h2>1. Introdução</h2>
-<p>
-Este relatório apresenta os resultados de uma pesquisa de preços realizada a partir de dados
-extraídos do Portal Nacional de Contratações Públicas (PNCP), utilizando o serviço de dados
-abertos do Compras.gov.br. O objetivo é subsidiar a estimativa de preços para contratações
-públicas, de forma transparente, reprodutível e alinhada às boas práticas de planejamento das
-contratações previstas na Lei nº 14.133/2021.
-</p>
-</div>
-
-<div class="section">
-<h2>2. Período e filtros utilizados</h2>
-<p>Período de inclusão no PNCP considerado na amostra:</p>
-<ul>
-  <li><strong>Data inicial:</strong> {meta.get("data_inicial", "")}</li>
-  <li><strong>Data final:</strong> {meta.get("data_final", "")}</li>
-</ul>
-
-<p>Resumo dos filtros aplicados na consulta:</p>
-<table>
-  <thead>
-    <tr><th>Parâmetro</th><th>Valor</th></tr>
-  </thead>
-  <tbody>
-    {filtros_html_rows}
-  </tbody>
-</table>
-</div>
-
-<div class="section">
-<h2>3. Estatísticas descritivas da amostra</h2>
-<p>
-A amostra utilizada contém <strong>{total_registros}</strong> registros de itens de contratação
-e <strong>{unidades_distintas}</strong> unidade(s) de medida distinta(s).
-</p>
-"""
-
-    if estat_resultado:
-        html += f"""
-<p>Para o campo <code>valorUnitarioResultado</code>, as estatísticas descritivas globais são:</p>
-<table>
-  <thead>
-    <tr><th>Medida</th><th>Valor</th></tr>
-  </thead>
-  <tbody>
-    {estat_html_rows}
-  </tbody>
-</table>
-"""
-    else:
-        html += "<p>Não foi possível calcular estatísticas descritivas para <code>valorUnitarioResultado</code>.</p>"
-
-    html += """
-</div>
-
-<div class="section">
-<h2>4. Metodologia de cálculo</h2>
-<p>
-Os dados foram extraídos diretamente da API oficial do PNCP, considerando o período informado
-e os filtros aplicados. Após a consolidação dos registros em base única, procedeu-se ao cálculo
-de estatísticas descritivas por unidade de medida, com destaque para a <strong>média saneada</strong>,
-obtida a partir da seguinte lógica:
-</p>
-<ol>
-  <li>Para cada unidade de medida, são considerados os valores de <code>valorUnitarioResultado</code> válidos.</li>
-  <li>Calculam-se a média (M) e o desvio-padrão (DP) da amostra.</li>
-  <li>É obtido o coeficiente de variação (CV = DP / M * 100). Se o CV for menor ou igual ao limite pré-definido (25%), a média simples é adotada como média saneada.</li>
-  <li>Caso o CV seja superior ao limite, são expurgados os valores considerados outliers, isto é, aqueles abaixo de M - DP ou acima de M + DP.</li>
-  <li>O procedimento é repetido iterativamente enquanto houver exclusão de valores e o CV permanecer acima do limite.</li>
-  <li>Ao final do processo, a média calculada sobre o conjunto remanescente é definida como <strong>média saneada</strong>.</li>
-</ol>
-<p>
-A partir da média saneada e do desvio-padrão por unidade de medida, foram também construídos
-intervalos de referência (limite inferior e superior), utilizados como apoio à análise crítica
-dos valores de mercado.
-</p>
-</div>
-
-<div class="section">
-<h2>6. Resultados e uso recomendado</h2>
-<p>
-Os resultados consolidados encontram-se detalhados nas planilhas eletrônicas geradas em paralelo
-a este relatório, contendo:
-</p>
-<ul>
-  <li>Aba <strong>dados</strong>: base completa de registros extraídos da API.</li>
-  <li>Aba <strong>resumo_unidade</strong>: estatísticas descritivas por unidade de medida, com destaque para a média saneada e para os intervalos de referência.</li>
-  <li>Aba <strong>preco_referencia</strong>: visão resumida das medidas centrais (média, mediana e média saneada) por unidade de medida.</li>
-</ul>
-<p>
-Recomenda-se que o <strong>preço de referência</strong> para fins de estimativa seja definido a partir
-da análise conjunta da média saneada, da mediana e do contexto de mercado, podendo ser adotada,
-por exemplo, a própria média saneada como valor de referência, desde que tecnicamente justificada
-no estudo preliminar e na nota técnica de pesquisa de preços.
-</p>
-<p>
-Este relatório pode ser anexado integralmente ao processo administrativo (por exemplo, em sistema
-eletrônico de informações), como evidência da metodologia e dos parâmetros utilizados na pesquisa de preços.
-</p>
-</div>
-
-<div class="section">
-<h2>7. Quadro-resumo de preço de referência por unidade de medida</h2>
-<p>
-O quadro abaixo apresenta, para cada unidade de medida, as principais medidas de tendência central
-e o preço de referência sugerido, bem como o intervalo de referência construído a partir da média
-saneada (ou de seu valor substituto, quando aplicável).
-</p>
-"""
-
-    if quadro_html_rows:
-        html += f"""
-<table>
-  <thead>
-    <tr>
-      <th>Unidade de medida</th>
-      <th>Média</th>
-      <th>Mediana</th>
-      <th>Média saneada</th>
-      <th>Preço de referência sugerido</th>
-      <th>Limite inferior (intervalo)</th>
-      <th>Limite superior (intervalo)</th>
-    </tr>
-  </thead>
-  <tbody>
-    {quadro_html_rows}
-  </tbody>
-</table>
-<p>
-Este quadro pode ser transcrito ou referenciado diretamente na nota técnica ou no despacho
-decisório como síntese dos parâmetros adotados para a estimativa de preços.
-</p>
-"""
-    else:
-        html += "<p>Não foi possível montar o quadro-resumo por falta de dados consolidados.</p>"
-
-    html += """
-</div>
-
-</body>
-</html>
-"""
-
-    with open(caminho_html, "w", encoding="utf-8") as f:
-        f.write(html)
-
-    print("✅ Relatório HTML gerado com sucesso.")
-    return caminho_html
-
+        <h2>4. Quadro de Referência de Preços</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Unidade</th>
+                    <th>Média</th>
+                    <th>Mediana</th>
+                    <th>Média Saneada</th>
+                    <th>Preço Ref. Sugerido</th>
+                    <th>Limite Inf.</th>
+                    <th>Limite Sup.</th>
+                </tr>
+            </thead>
+            <tbody>
+                {quadro_rows}
+            </tbody>
+        </table>
+        
+        <p><em>Este relatório serve como evidência de pesquisa de mercado conforme IN SEGES/ME nº 65/2021 e Lei 14.133/2021.</em></p>
+    </body>
+    </html>
+    """
+    
+    with open(caminho_saida, "w", encoding="utf-8") as f:
+        f.write(html_content)
 
 # ============================================================
-# 🚀 FUNÇÃO PRINCIPAL
+# 🚀 FUNÇÃO PRINCIPAL (INTERFACE COM O STREAMLIT)
 # ============================================================
-
-def main():
-    cod_item = COD_ITEM_CATALOGO if COD_ITEM_CATALOGO is not None else None
-
-    data_inicial, data_final = calcular_intervalo_ultimo_ano()
-
-    filtros = montar_filtros_opcionais()
-
-    filtros_efetivos = {
-        "codItemCatalogo": cod_item if cod_item is not None else "",
-        "orgaoEntidadeCnpj": ORGAO_ENTIDADE_CNPJ,
-        "unidadeOrgaoCodigoUnidade": UNIDADE_ORGAO_CODIGO_UNIDADE,
-        "situacaoCompraItem": SITUACAO_COMPRA_ITEM,
-        "materialOuServico": MATERIAL_OU_SERVICO,
-        "codigoClasse": CODIGO_CLASSE,
-        "codigoGrupo": CODIGO_GRUPO,
-        "codFornecedor": COD_FORNECEDOR,
-        "temResultado": FILTRAR_TEM_RESULTADO,
-        "bps": FILTRAR_BPS,
-        "margemPreferenciaNormal": FILTRAR_MARGEM_PREFERENCIA_NORMAL,
-        "codigoNCM": CODIGO_NCM,
-    }
-    filtros_efetivos = {
-        k: v for k, v in filtros_efetivos.items()
-        if v not in (None, "", [])
-    }
-
-    resultados = buscar_itens_pncp(
-        cod_item_catalogo=cod_item,
-        data_inicial=data_inicial,
-        data_final=data_final,
-        filtros_opcionais=filtros,
-        tamanho_pagina=500,
-    )
-
-    df_dados, resumo_df, preco_ref_df = preparar_dataframes(resultados)
-
-    if NOME_BASE_SAIDA:
-        base = NOME_BASE_SAIDA
-    else:
-        cod_str = str(cod_item) if cod_item is not None else "sem_item"
-        base = f"pncp_itens_param_{cod_str}_{data_inicial}_a_{data_final}"
-
-    caminho_excel = f"{base}.xlsx"
-    caminho_html = f"{base}.html"
-
-    salvar_resultados_em_excel(df_dados, resumo_df, preco_ref_df, caminho_excel)
-
-    meta = {
-        "data_inicial": data_inicial,
-        "data_final": data_final,
-        "filtros_efetivos": filtros_efetivos,
-    }
-
-    gerar_relatorio_html(df_dados, resumo_df, preco_ref_df, meta, caminho_html)
-
-    print("==============================================")
-    print(" Processo concluído (v3.3 – Excel + HTML sem seção de gráficos).")
-    print(f" Arquivo Excel: {caminho_excel}")
-    print(f" Relatório HTML: {caminho_html}")
-    print("==============================================")
-
-
-# ============================================================
-# 🏁 PONTO DE ENTRADA
-# ============================================================
-
-# ============================================================
-# 🔁 FUNÇÃO PARA USO VIA APLICAÇÃO WEB (STREAMLIT)
-# ============================================================
-
-import io
-import os
 
 def executar_pesquisa_e_gerar_arquivos(
     cod_item_catalogo=None,
-    orgao_cnpj="",
+    orgao_cnpj=None,
     unidade_orgao=None,
-    situacao_item="",
-    material_ou_servico="",
+    situacao_item=None,
+    material_ou_servico=None,
     codigo_classe=None,
     codigo_grupo=None,
-    cod_fornecedor="",
+    cod_fornecedor=None,
     tem_resultado=None,
     bps=None,
     margem_pref_normal=None,
-    codigo_ncm="",
+    codigo_ncm=None,
     nome_base_saida=None,
 ):
     """
-    Executa toda a pipeline:
-      - configura os filtros,
-      - chama a API do PNCP,
-      - gera DataFrames,
-      - monta Excel em memória (bytes),
-      - monta HTML da nota técnica (string).
-
-    Retorna:
-      (excel_bytes, html_string, meta_dict)
+    Função principal chamada pelo frontend (Streamlit).
     """
-    global COD_ITEM_CATALOGO, ORGAO_ENTIDADE_CNPJ, UNIDADE_ORGAO_CODIGO_UNIDADE
-    global SITUACAO_COMPRA_ITEM, MATERIAL_OU_SERVICO, CODIGO_CLASSE, CODIGO_GRUPO
-    global COD_FORNECEDOR, FILTRAR_TEM_RESULTADO, FILTRAR_BPS
-    global FILTRAR_MARGEM_PREFERENCIA_NORMAL, CODIGO_NCM, NOME_BASE_SAIDA
+    
+    # 1. Define intervalo de datas (obrigatório e automático)
+    data_ini, data_fim = calcular_intervalo_ultimo_ano()
 
-    # Ajusta configuração global conforme parâmetros recebidos
-    COD_ITEM_CATALOGO = cod_item_catalogo
-    ORGAO_ENTIDADE_CNPJ = orgao_cnpj or ""
-    UNIDADE_ORGAO_CODIGO_UNIDADE = unidade_orgao
-    SITUACAO_COMPRA_ITEM = situacao_item or ""
-    MATERIAL_OU_SERVICO = material_ou_servico or ""
-    CODIGO_CLASSE = codigo_classe
-    CODIGO_GRUPO = codigo_grupo
-    COD_FORNECEDOR = cod_fornecedor or ""
-    FILTRAR_TEM_RESULTADO = tem_resultado
-    FILTRAR_BPS = bps
-    FILTRAR_MARGEM_PREFERENCIA_NORMAL = margem_pref_normal
-    CODIGO_NCM = codigo_ncm or ""
-    NOME_BASE_SAIDA = nome_base_saida
-
-    # Intervalo padrão de 1 ano
-    data_inicial, data_final = calcular_intervalo_ultimo_ano()
-
-    # Filtros opcionais montados pela função existente
-    filtros = montar_filtros_opcionais()
-
-    filtros_efetivos = {
-        "codItemCatalogo": cod_item_catalogo if cod_item_catalogo is not None else "",
-        "orgaoEntidadeCnpj": ORGAO_ENTIDADE_CNPJ,
-        "unidadeOrgaoCodigoUnidade": UNIDADE_ORGAO_CODIGO_UNIDADE,
-        "situacaoCompraItem": SITUACAO_COMPRA_ITEM,
-        "materialOuServico": MATERIAL_OU_SERVICO,
-        "codigoClasse": CODIGO_CLASSE,
-        "codigoGrupo": CODIGO_GRUPO,
-        "codFornecedor": COD_FORNECEDOR,
-        "temResultado": FILTRAR_TEM_RESULTADO,
-        "bps": FILTRAR_BPS,
-        "margemPreferenciaNormal": FILTRAR_MARGEM_PREFERENCIA_NORMAL,
-        "codigoNCM": CODIGO_NCM,
-    }
-    filtros_efetivos = {
-        k: v for k, v in filtros_efetivos.items()
-        if v not in (None, "", [])
-    }
-
-    # Chamada paginada à API
-    resultados = buscar_itens_pncp(
+    # 2. Monta parâmetros limpos (remove Nones e Strings vazias)
+    params = montar_parametros_consulta(
+        data_inicial=data_ini,
+        data_final=data_fim,
         cod_item_catalogo=cod_item_catalogo,
-        data_inicial=data_inicial,
-        data_final=data_final,
-        filtros_opcionais=filtros,
-        tamanho_pagina=500,
+        orgao_cnpj=orgao_cnpj,
+        unidade_orgao=unidade_orgao,
+        situacao_item=situacao_item,
+        material_ou_servico=material_ou_servico,
+        codigo_classe=codigo_classe,
+        codigo_grupo=codigo_grupo,
+        cod_fornecedor=cod_fornecedor,
+        tem_resultado=tem_resultado,
+        bps=bps,
+        margem_pref_normal=margem_pref_normal,
+        codigo_ncm=codigo_ncm
     )
 
-    df_dados, resumo_df, preco_ref_df = preparar_dataframes(resultados)
+    # 3. Executa a busca
+    lista_resultados = buscar_itens_pncp(params)
 
-    # Define nome base sem extensão
-    if nome_base_saida:
-        base = nome_base_saida
-    else:
-        cod_str = str(cod_item_catalogo) if cod_item_catalogo is not None else "sem_item"
-        base = f"pncp_itens_param_{cod_str}_{data_inicial}_a_{data_final}"
+    # 4. Processa os dados
+    df_dados, resumo_df, preco_ref_df = preparar_dataframes(lista_resultados)
 
-    # ===== Excel em memória =====
-    if df_dados is not None and not df_dados.empty:
-        excel_buffer = io.BytesIO()
-        with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
-            df_dados.to_excel(writer, index=False, sheet_name="dados")
-            if resumo_df is not None and not resumo_df.empty:
-                resumo_df.to_excel(writer, index=False, sheet_name="resumo_unidade")
-            if preco_ref_df is not None and not preco_ref_df.empty:
-                preco_ref_df.to_excel(writer, index=False, sheet_name="preco_referencia")
-        excel_buffer.seek(0)
-        excel_bytes = excel_buffer.getvalue()
-    else:
-        print("⚠ Nenhum dado retornado pela API. Excel não será gerado.")
-        excel_bytes = b""  # vazio → o Streamlit mostra mensagem de erro amigável
+    # 5. Gera nome base do arquivo
+    if not nome_base_saida:
+        # Tenta pegar algum identificador para o nome
+        id_nome = "geral"
+        if params.get("codItemCatalogo"):
+            id_nome = f"item_{params['codItemCatalogo']}"
+        elif params.get("codigoClasse"):
+            id_nome = f"classe_{params['codigoClasse']}"
+        nome_base_saida = f"pesquisa_pncp_{id_nome}_{data_ini}"
 
-    # ===== HTML da nota técnica (usando função existente) =====
+    # 6. Gera Excel em memória (BytesIO) para download
+    excel_bytes = b""
+    if not df_dados.empty:
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
+            df_dados.to_excel(writer, sheet_name="dados", index=False)
+            if not resumo_df.empty:
+                resumo_df.to_excel(writer, sheet_name="resumo_unidade", index=False)
+            if not preco_ref_df.empty:
+                preco_ref_df.to_excel(writer, sheet_name="preco_referencia", index=False)
+        excel_bytes = output.getvalue()
+
+    # 7. Gera HTML (Temporário -> String -> Deleta)
+    # Precisamos salvar em disco primeiro para reaproveitar a função de HTML, ou refatorar ela.
+    # Vamos salvar temp e ler.
+    caminho_html = f"{nome_base_saida}.html"
+    
+    # Metadados para o relatório
     meta = {
-        "data_inicial": data_inicial,
-        "data_final": data_final,
-        "filtros_efetivos": filtros_efetivos,
+        "data_inicial": data_ini,
+        "data_final": data_fim,
+        "filtros_efetivos": {k: v for k, v in params.items() if "data" not in k} # Mostra só os filtros extras
     }
-
-    html_caminho_tmp = f"{base}.html"
-    gerar_relatorio_html(df_dados, resumo_df, preco_ref_df, meta, html_caminho_tmp)
-
-    with open(html_caminho_tmp, "r", encoding="utf-8") as f:
-        html_string = f.read()
-
-    # Opcional: apaga arquivo temporário no ambiente do servidor
-    try:
-        os.remove(html_caminho_tmp)
-    except Exception:
-        pass
-
-    meta["nome_base"] = base
+    
+    gerar_relatorio_html(df_dados, resumo_df, preco_ref_df, meta, caminho_html)
+    
+    html_string = ""
+    if os.path.exists(caminho_html):
+        with open(caminho_html, "r", encoding="utf-8") as f:
+            html_string = f.read()
+        try:
+            os.remove(caminho_html) # Limpa arquivo temporário
+        except:
+            pass
 
     return excel_bytes, html_string, meta
 
-
 if __name__ == "__main__":
-    # Opcional: teste local
-    # main()
-    pass
-
+    print("Execute via Streamlit ou importe como módulo.")
