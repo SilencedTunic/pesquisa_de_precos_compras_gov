@@ -1,21 +1,9 @@
 """
 Coletor automático de itens de contratações PNCP (Lei 14.133/2021)
-Versão 4.1 – backend focado em flexibilidade de filtros para a API do PNCP.
+Versão 4.2 – backend focado em correção de requisição API (Headers, Paginação e Chunking de Datas).
 
 Este módulo é pensado para ser usado pelo frontend em Streamlit.
-A função pública principal é `executar_pesquisa_e_gerar_arquivos`, que:
-
-- consulta a API de Itens de Contratações PNCP (Lei 14.133/2021);
-- consolida os resultados em um DataFrame;
-- calcula estatísticas (incluindo média saneada);
-- gera uma planilha Excel em memória;
-- gera uma Nota Técnica em HTML (string) pronta para ser exibida/baixada.
-
-O objetivo específico desta versão é permitir consultas mesmo quando
-o código do item de catálogo (CATMAT/CATSER) não é informado,
-usando apenas classe/grupo e outros filtros.
-
-Importante: o intervalo de datas é sempre o último ano de inclusão no PNCP.
+A função pública principal é `executar_pesquisa_e_gerar_arquivos`.
 """
 
 from __future__ import annotations
@@ -38,14 +26,20 @@ from io import BytesIO
 # 🔧 UTILITÁRIOS GERAIS
 # ============================================================
 
-def calcular_intervalo_ultimo_ano() -> Tuple[str, str]:
-    """Retorna (data_inicial, data_final) em formato YYYY-MM-DD
-    considerando hoje e hoje - 365 dias.
+def gerar_intervalos_mensais(data_inicial: date, data_final: date) -> List[Tuple[str, str]]:
     """
-    data_final = date.today()
-    data_inicial = data_final - timedelta(days=365)
-    return data_inicial.strftime("%Y-%m-%d"), data_final.strftime("%Y-%m-%d")
-
+    Fraciona um grande intervalo de datas em blocos menores (ex: 30 dias).
+    Garante que a API não recuse requisições por limite de dias estourado.
+    """
+    intervalos = []
+    atual_inicio = data_inicial
+    while atual_inicio <= data_final:
+        atual_fim = atual_inicio + timedelta(days=30)
+        if atual_fim > data_final:
+            atual_fim = data_final
+        intervalos.append((atual_inicio.strftime("%Y-%m-%d"), atual_fim.strftime("%Y-%m-%d")))
+        atual_inicio = atual_fim + timedelta(days=1)
+    return intervalos
 
 def bool_to_api_flag(value: Optional[bool]) -> Optional[str]:
     """Converte True/False/None em 'true'/'false'/None para a API."""
@@ -53,14 +47,8 @@ def bool_to_api_flag(value: Optional[bool]) -> Optional[str]:
         return "true" if value else "false"
     return None
 
-
 def limpar_valor(valor: Any) -> Any:
-    """Normaliza valores opcionais.
-
-    - Strings vazias viram None.
-    - None permanece None.
-    - Outros tipos são retornados como estão.
-    """
+    """Normaliza valores opcionais."""
     if valor is None:
         return None
     if isinstance(valor, str):
@@ -89,16 +77,7 @@ def montar_parametros_consulta(
     margem_pref_normal: Optional[bool] = None,
     codigo_ncm: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Monta dicionário de parâmetros limpos para a API.
-
-    Regras importantes:
-    - Sempre envia o intervalo dataInclusaoPncpInicial/dataInclusaoPncpFinal.
-    - Não envia chaves com valor None.
-    - Se o usuário informou classe/grupo mas não escolheu M/S,
-      assume-se 'M' (material) como padrão, pois é o caso mais comum
-      nas consultas com CATMAT.
-    """
-
+    
     cod_item_catalogo = limpar_valor(cod_item_catalogo)
     orgao_cnpj = limpar_valor(orgao_cnpj)
     unidade_orgao = limpar_valor(unidade_orgao)
@@ -112,10 +91,7 @@ def montar_parametros_consulta(
     margem_pref_flag = bool_to_api_flag(margem_pref_normal)
     codigo_ncm = limpar_valor(codigo_ncm)
 
-    # ❤️ Regra crucial para o problema relatado:
-    # quando o usuário filtra por classe/grupo mas deixa "Material ou Serviço"
-    # em branco, a API do PNCP tende a retornar vazio. Para esses casos
-    # definimos 'M' como padrão.
+    # Padroniza para material se grupo/classe for especificado
     if material_ou_servico is None and (codigo_classe is not None or codigo_grupo is not None):
         material_ou_servico = "M"
 
@@ -162,17 +138,17 @@ BASE_URL_ITENS_PNCP = (
 )
 
 
-def buscar_itens_pncp(params_base: Dict[str, Any], tamanho_pagina: int = 500) -> List[Dict[str, Any]]:
-    """Faz a paginação automática na API do PNCP usando os parâmetros fornecidos.
-
-    Retorna lista de dicionários (registros brutos da API).
-    """
-
+def buscar_itens_pncp(params_base: Dict[str, Any], tamanho_pagina: int = 100) -> List[Dict[str, Any]]:
     pagina = 1
     todos_resultados: List[Dict[str, Any]] = []
 
-    print("📡 Iniciando consulta ao PNCP...")
-    print(f"   Parâmetros efetivos: {params_base}")
+    print(f"📡 Iniciando consulta PNCP (período {params_base.get('dataInclusaoPncpInicial')} a {params_base.get('dataInclusaoPncpFinal')})...")
+    
+    # Headers adicionados para evitar recusa de conexão (WAF/Firewall do Governo)
+    headers = {
+        "Accept": "*/*",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+    }
 
     while True:
         params = dict(params_base)
@@ -180,14 +156,15 @@ def buscar_itens_pncp(params_base: Dict[str, Any], tamanho_pagina: int = 500) ->
         params["tamanhoPagina"] = tamanho_pagina
 
         try:
-            resp = requests.get(BASE_URL_ITENS_PNCP, params=params, timeout=60)
-        except Exception as exc:  # pragma: no cover - log de ambiente real
+            resp = requests.get(BASE_URL_ITENS_PNCP, params=params, headers=headers, timeout=60)
+        except Exception as exc:  # pragma: no cover
             print(f"❌ Erro de conexão na página {pagina}: {exc}")
             break
 
         if resp.status_code != 200:
             print(f"❌ Erro HTTP {resp.status_code} na página {pagina}.")
             print(f"   URL chamada: {resp.url}")
+            print(f"   Retorno: {resp.text}")  # Exibe erro detalhado da API, se houver
             break
 
         try:
@@ -200,13 +177,13 @@ def buscar_itens_pncp(params_base: Dict[str, Any], tamanho_pagina: int = 500) ->
         total_paginas = dados.get("totalPaginas") or 1
 
         if not resultados:
-            print(f"ℹ️ Página {pagina} veio vazia. Encerrando paginação.")
+            print(f"ℹ️ Página {pagina} veio vazia. Encerrando paginação deste bloco.")
             break
 
         todos_resultados.extend(resultados)
         print(
             f"   ✅ Página {pagina}/{total_paginas} carregada "
-            f"({len(resultados)} itens). Total acumulado: {len(todos_resultados)}"
+            f"({len(resultados)} itens). Total no bloco: {len(todos_resultados)}"
         )
 
         if pagina >= total_paginas:
@@ -214,21 +191,14 @@ def buscar_itens_pncp(params_base: Dict[str, Any], tamanho_pagina: int = 500) ->
 
         pagina += 1
 
-    print(f"📦 Total de registros obtidos: {len(todos_resultados)}")
     return todos_resultados
 
 
 # ============================================================
-# 📊 ESTATÍSTICAS – MÉDIA SANEADA
+# 📊 ESTATÍSTICAS – MÉDIA SANEADA E OUTROS
 # ============================================================
 
 def calcular_media_sanada_serie(serie: pd.Series, cv_limite: float = 25.0) -> float:
-    """Calcula média saneada por expurgo iterativo de outliers.
-
-    Expurga valores fora do intervalo [m - dp, m + dp] enquanto
-    o coeficiente de variação (CV) for maior que `cv_limite`.
-    """
-
     s = pd.to_numeric(serie.dropna(), errors="coerce").dropna()
     if s.empty:
         return float("nan")
@@ -255,7 +225,6 @@ def calcular_media_sanada_serie(serie: pd.Series, cv_limite: float = 25.0) -> fl
 
 
 def calcular_resumo_por_unidade(df: pd.DataFrame) -> pd.DataFrame:
-    """Agrupa por unidadeMedida e calcula estatísticas básicas + média saneada."""
     if df.empty or "unidadeMedida" not in df.columns or "valorUnitarioResultado" not in df.columns:
         return pd.DataFrame()
 
@@ -292,7 +261,6 @@ def calcular_resumo_por_unidade(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def montar_preco_referencia(resumo_df: pd.DataFrame) -> pd.DataFrame:
-    """Tabela enxuta de referência de preços por unidade de medida."""
     if resumo_df.empty:
         return pd.DataFrame()
 
@@ -309,38 +277,17 @@ def montar_preco_referencia(resumo_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def preparar_dataframes(lista_dados: List[Dict[str, Any]]) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Transforma lista de dicts em três DataFrames:
-
-    - df_dados: registros completos, com colunas organizadas;
-    - resumo_df: estatísticas por unidade;
-    - preco_ref_df: tabela de referência de preços.
-    """
-
     df = pd.DataFrame(lista_dados)
     if df.empty:
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     cols_order = [
-        "idContratacaoPNCP",
-        "idCompra",
-        "idCompraItem",
-        "orgaoEntidadeCnpj",
-        "unidadeOrgaoCodigoUnidade",
-        "descricaoResumida",
-        "materialOuServicoNome",
-        "codigoClasse",
-        "codigoGrupo",
-        "codItemCatalogo",
-        "unidadeMedida",
-        "quantidade",
-        "valorUnitarioEstimado",
-        "valorTotal",
-        "quantidadeResultado",
-        "valorUnitarioResultado",
-        "valorTotalResultado",
-        "situacaoCompraItemNome",
-        "nomeFornecedor",
-        "dataInclusaoPncp",
+        "idContratacaoPNCP", "idCompra", "idCompraItem", "orgaoEntidadeCnpj",
+        "unidadeOrgaoCodigoUnidade", "descricaoResumida", "materialOuServicoNome",
+        "codigoClasse", "codigoGrupo", "codItemCatalogo", "unidadeMedida",
+        "quantidade", "valorUnitarioEstimado", "valorTotal", "quantidadeResultado",
+        "valorUnitarioResultado", "valorTotalResultado", "situacaoCompraItemNome",
+        "nomeFornecedor", "dataInclusaoPncp",
     ]
 
     cols_existentes = [c for c in cols_order if c in df.columns]
@@ -364,7 +311,6 @@ def gerar_relatorio_html(
     meta: Dict[str, Any],
     caminho_saida: str,
 ) -> None:
-    """Gera um HTML simples de Nota Técnica com quadro de preços."""
 
     total_registros = len(df_dados)
     unidades_distintas = (
@@ -379,9 +325,7 @@ def gerar_relatorio_html(
     quadro_rows = ""
     if not preco_ref_df.empty and not resumo_df.empty:
         full_ref = preco_ref_df.merge(
-            resumo_df[
-                ["unidadeMedida", "limite_inferior_intervalo", "limite_superior_intervalo"]
-            ],
+            resumo_df[["unidadeMedida", "limite_inferior_intervalo", "limite_superior_intervalo"]],
             on="unidadeMedida",
             how="left",
         )
@@ -459,7 +403,7 @@ def gerar_relatorio_html(
 
     <h2>1. Parâmetros da pesquisa</h2>
     <div class="box">
-        <p><strong>Intervalo temporal:</strong> {meta.get("data_inicial")} a {meta.get("data_final")}</p>
+        <p><strong>Intervalo temporal total pesquisado:</strong> {meta.get("data_inicial")} a {meta.get("data_final")}</p>
         <table>
             <tr><th>Filtro</th><th>Valor aplicado</th></tr>
             {filtros_rows}
@@ -531,56 +475,64 @@ def executar_pesquisa_e_gerar_arquivos(
     codigo_ncm: Optional[str] = "",
     nome_base_saida: Optional[str] = None,
 ):
-    """Função chamada pelo Streamlit.
+    
+    # 1) Intervalo base temporal - Últimos 365 dias, divididos em blocos de até 30 dias
+    data_fim_obj = date.today()
+    data_ini_obj = data_fim_obj - timedelta(days=365)
+    
+    intervalos = gerar_intervalos_mensais(data_ini_obj, data_fim_obj)
+    lista_resultados = []
+    params_info = {}
 
-    Retorna:
-        - excel_bytes: conteúdo de um arquivo .xlsx (ou b"" se sem dados);
-        - html_string: Nota Técnica em HTML;
-        - meta: dicionário com metadados da consulta (inclui 'nome_base').
-    """
+    for ini, fim in intervalos:
+        # 2) Monta parâmetros para a API para cada bloco
+        params = montar_parametros_consulta(
+            data_inicial=ini,
+            data_final=fim,
+            cod_item_catalogo=cod_item_catalogo,
+            orgao_cnpj=orgao_cnpj,
+            unidade_orgao=unidade_orgao,
+            situacao_item=situacao_item,
+            material_ou_servico=material_ou_servico,
+            codigo_classe=codigo_classe,
+            codigo_grupo=codigo_grupo,
+            cod_fornecedor=cod_fornecedor,
+            tem_resultado=tem_resultado,
+            bps=bps,
+            margem_pref_normal=margem_pref_normal,
+            codigo_ncm=codigo_ncm,
+        )
 
-    # 1) Intervalo de datas (obrigatório) – últimos 12 meses
-    data_ini, data_fim = calcular_intervalo_ultimo_ano()
+        if not params_info: # Guarda filtros globais apenas uma vez para o relatório
+            params_info = {k: v for k, v in params.items() if "data" not in k}
 
-    # 2) Monta parâmetros para a API
-    params = montar_parametros_consulta(
-        data_inicial=data_ini,
-        data_final=data_fim,
-        cod_item_catalogo=cod_item_catalogo,
-        orgao_cnpj=orgao_cnpj,
-        unidade_orgao=unidade_orgao,
-        situacao_item=situacao_item,
-        material_ou_servico=material_ou_servico,
-        codigo_classe=codigo_classe,
-        codigo_grupo=codigo_grupo,
-        cod_fornecedor=cod_fornecedor,
-        tem_resultado=tem_resultado,
-        bps=bps,
-        margem_pref_normal=margem_pref_normal,
-        codigo_ncm=codigo_ncm,
-    )
+        # 3) Consulta iterativa com tamanho de página seguro (100)
+        resultados_chunk = buscar_itens_pncp(params, tamanho_pagina=100)
+        lista_resultados.extend(resultados_chunk)
 
-    # 3) Consulta à API
-    lista_resultados = buscar_itens_pncp(params)
+    print(f"📦 Total GERAL de registros obtidos: {len(lista_resultados)}")
 
     # 4) Consolida em DataFrames
     df_dados, resumo_df, preco_ref_df = preparar_dataframes(lista_resultados)
+
+    data_ini_str = data_ini_obj.strftime("%Y-%m-%d")
+    data_fim_str = data_fim_obj.strftime("%Y-%m-%d")
 
     # 5) Define nome-base dos arquivos
     if nome_base_saida:
         base_name = nome_base_saida
     else:
-        if params.get("codItemCatalogo"):
-            ident = f"item_{params['codItemCatalogo']}"
-        elif params.get("codigoClasse"):
-            ident = f"classe_{params['codigoClasse']}"
-        elif params.get("codigoGrupo"):
-            ident = f"grupo_{params['codigoGrupo']}"
-        elif params.get("orgaoEntidadeCnpj"):
-            ident = f"cnpj_{params['orgaoEntidadeCnpj']}"
+        if params_info.get("codItemCatalogo"):
+            ident = f"item_{params_info['codItemCatalogo']}"
+        elif params_info.get("codigoClasse"):
+            ident = f"classe_{params_info['codigoClasse']}"
+        elif params_info.get("codigoGrupo"):
+            ident = f"grupo_{params_info['codigoGrupo']}"
+        elif params_info.get("orgaoEntidadeCnpj"):
+            ident = f"cnpj_{params_info['orgaoEntidadeCnpj']}"
         else:
             ident = "geral"
-        base_name = f"pesquisa_pncp_{ident}_{data_ini}"
+        base_name = f"pesquisa_pncp_{ident}_{data_ini_str}"
 
     # 6) Gera Excel em memória
     excel_bytes: bytes = b""
@@ -594,13 +546,13 @@ def executar_pesquisa_e_gerar_arquivos(
                 preco_ref_df.to_excel(writer, sheet_name="preco_referencia", index=False)
         excel_bytes = buffer.getvalue()
 
-    # 7) Gera HTML da Nota Técnica (arquivo temporário -> string)
+    # 7) Gera HTML da Nota Técnica
     caminho_html = f"{base_name}.html"
 
     meta = {
-        "data_inicial": data_ini,
-        "data_final": data_fim,
-        "filtros_efetivos": {k: v for k, v in params.items() if "data" not in k},
+        "data_inicial": data_ini_str,
+        "data_final": data_fim_str,
+        "filtros_efetivos": params_info,
         "nome_base": base_name,
     }
 
@@ -613,13 +565,6 @@ def executar_pesquisa_e_gerar_arquivos(
         try:
             os.remove(caminho_html)
         except Exception:
-            # Em ambiente local não tem problema sobrar o arquivo;
-            # em servidores costuma dar certo remover.
             pass
 
     return excel_bytes, html_string, meta
-
-
-if __name__ == "__main__":
-    # Pequeno teste sintático rápido (não chama a API em produção).
-    print("Módulo pncp_backend carregado. Use via Streamlit ou como biblioteca.")
